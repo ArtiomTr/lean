@@ -16,8 +16,15 @@ authors = ["TODO"]
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-alloy-consensus = "0.1.0"
-alloy-primitives = "0.1.0"
+chain = { path = "./chain" }
+containers = { path = "./containers" }
+fork_choice = { path = "./fork_choice" }
+lean_tests = { path = "./lean_tests" }
+networking = { path = "./networking" }
+validator = { path = "./validator" }
+libp2p = {version =  "0.56.0", default-features = false, features = ['gossipsub'] }
+alloy-consensus = "1.0.38"
+alloy-primitives = "1.4.0"
 anyhow = "1.0"
 paste = "1.0.15"
 serde = { version = "1.0", features = ["derive"] }
@@ -29,6 +36,7 @@ ssz-types = "0.3.0"
 tokio = { version = "1.0", features = ["full"] }
 tree-hash = "0.4.0"
 typenum = "1.19"
+sha2 = "0.10"
 
 [workspace.dev-dependencies]
 rstest = "0.18.2"
@@ -39,11 +47,3 @@ serde_json = "1.0.107"
 name = "lean_client"
 version = "0.1.0"
 edition = "2021"
-
-[dependencies]
-chain = { path = "./chain" }
-containers = { path = "./containers" }
-fork_choice = { path = "./fork_choice" }
-lean_tests = { path = "./lean_tests" }
-networking = { path = "./networking" }
-validator = { path = "./validator" }
