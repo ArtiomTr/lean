@@ -1,7 +1,19 @@
-use snap::raw::{Decoder, Encoder};
 use libp2p::gossipsub::{DataTransform, Message, RawMessage, TopicHash};
+use snap::raw::{Decoder, Encoder};
 
 pub struct Compressor;
+
+impl Compressor {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for Compressor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl DataTransform for Compressor {
     fn inbound_transform(&self, raw_message: RawMessage) -> Result<Message, std::io::Error> {
         let mut decoder = Decoder::new();

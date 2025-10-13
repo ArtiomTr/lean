@@ -22,7 +22,18 @@ fork_choice = { path = "./fork_choice" }
 lean_tests = { path = "./lean_tests" }
 networking = { path = "./networking" }
 validator = { path = "./validator" }
-libp2p = {version =  "0.56.0", default-features = false, features = ['gossipsub'] }
+libp2p = {version =  "0.56.0", default-features = false, features = [
+    'dns',
+    'gossipsub',
+    'identify',
+    'macros',
+    'noise',
+    'quic',
+    'request-response',
+    'tcp',
+    'tokio',
+    'yamux'
+] }
 alloy-consensus = "1.0.38"
 alloy-primitives = "1.4.0"
 anyhow = "1.0"

@@ -1,9 +1,9 @@
+use crate::gossipsub::topic::GossipsubTopic;
 use crate::types::MESSAGE_DOMAIN_VALID_SNAPPY;
+use libp2p::gossipsub::{Config, ConfigBuilder, Message, MessageId, ValidationMode};
 use sha2::Digest;
 use sha2::Sha256;
 use std::time::Duration;
-use libp2p::gossipsub::{Config, ConfigBuilder, Message, MessageId, ValidationMode};
-use crate::gossipsub::topic::GossipsubTopic;
 
 #[derive(Debug, Clone)]
 pub struct GossipsubConfig {
@@ -17,17 +17,15 @@ impl GossipsubConfig {
         let seconds_per_slot = 1000;
         let config = ConfigBuilder::default()
             .fanout_ttl(Duration::from_secs(60))
-            .history_length(5)        // = mcache_len
-            .history_gossip(3)        // = mcache_gossip
+            .history_length(5) // = mcache_len
+            .history_gossip(3) // = mcache_gossip
             .duplicate_cache_time(Duration::from_secs(120)) // seen_ttl
-            .mesh_n(6)                // D
-            .mesh_n_low(4)            // D_low
-            .mesh_n_high(12)          // D_high
-            .mesh_n(6)           // D_lazy
+            .mesh_n(6) // D
+            .mesh_n_low(4) // D_low
+            .mesh_n_high(12) // D_high
+            .mesh_n(6) // D_lazy
             .duplicate_cache_time(Duration::from_secs(
-                justification_lookback_slots
-                    * seconds_per_slot
-                    * 2,
+                justification_lookback_slots * seconds_per_slot * 2,
             ))
             .validate_messages()
             .validation_mode(ValidationMode::Anonymous)
@@ -45,7 +43,6 @@ impl GossipsubConfig {
         self.topics = topics;
     }
 }
-
 
 pub fn compute_message_id(message: &Message) -> MessageId {
     let topic_bytes = message.topic.as_str().as_bytes();

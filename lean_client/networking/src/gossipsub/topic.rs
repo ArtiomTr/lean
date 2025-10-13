@@ -43,14 +43,12 @@ impl GossipsubTopic {
     }
 
     fn split_topic(topic: &TopicHash) -> Result<Vec<&str>, String> {
-        let parts: Vec<&str> = topic
-            .as_str()
-            .trim_start_matches('/')
-            .split('/')
-            .collect();
+        let parts: Vec<&str> = topic.as_str().trim_start_matches('/').split('/').collect();
 
         if parts.len() != 4 {
-            return Err(format!("Invalid topic format (expected 4 parts): {topic:?}"));
+            return Err(format!(
+                "Invalid topic format (expected 4 parts): {topic:?}"
+            ));
         }
 
         Ok(parts)
@@ -88,7 +86,6 @@ impl std::fmt::Display for GossipsubTopic {
         )
     }
 }
-
 
 impl From<GossipsubTopic> for IdentTopic {
     fn from(topic: GossipsubTopic) -> IdentTopic {
