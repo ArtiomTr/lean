@@ -1,15 +1,13 @@
-use crate::extensions::JustifiableSlot;
 use std::collections::HashMap;
 
 use containers::{
-    block::hash_tree_root, checkpoint::Checkpoint, config::Config, state::State,
-    vote::SignedVote, Root, Slot, ValidatorIndex, SignedBlock,
+    block::hash_tree_root, checkpoint::Checkpoint, config::Config, state::State, Root, SignedBlock,
+    Slot, ValidatorIndex,
 };
 
 pub type Interval = u64;
 pub const INTERVALS_PER_SLOT: Interval = 8;
 pub const SECONDS_PER_SLOT: u64 = 12;
-
 
 #[derive(Debug, Clone, Default)]
 pub struct Store {
@@ -103,7 +101,12 @@ pub fn get_fork_choice_head(
                 let wa = vote_weights.get(a).copied().unwrap_or(0);
                 let wb = vote_weights.get(b).copied().unwrap_or(0);
                 wa.cmp(&wb)
-                    .then_with(|| store.blocks[*a].message.slot.cmp(&store.blocks[*b].message.slot))
+                    .then_with(|| {
+                        store.blocks[*a]
+                            .message
+                            .slot
+                            .cmp(&store.blocks[*b].message.slot)
+                    })
                     .then_with(|| (*a).cmp(b))
             })
             .unwrap();
@@ -122,8 +125,12 @@ pub fn update_head(store: &mut Store) {
         store.latest_justified = latest_justified;
     }
 
-    store.head =
-        get_fork_choice_head(store, store.latest_justified.root, &store.latest_known_votes, 0);
+    store.head = get_fork_choice_head(
+        store,
+        store.latest_justified.root,
+        &store.latest_known_votes,
+        0,
+    );
 
     if let Some(state) = store.states.get(&store.head) {
         store.latest_finalized = state.latest_finalized.clone();
@@ -164,8 +171,7 @@ pub fn get_vote_target(store: &Store) -> Checkpoint {
     let mut target_root = store.head;
 
     for _ in 0..3 {
-        if store.blocks[&target_root].message.slot > store.blocks[&store.safe_target].message.slot
-        {
+        if store.blocks[&target_root].message.slot > store.blocks[&store.safe_target].message.slot {
             target_root = store.blocks[&target_root].message.parent_root;
         } else {
             break;

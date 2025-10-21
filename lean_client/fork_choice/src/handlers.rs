@@ -37,7 +37,7 @@ pub fn on_attestation(store: &mut Store, attestation: SignedVote, is_from_block:
             .get(&validator_key)
             .map_or(true, |v| v.slot < vote.slot)
         {
-            store.latest_new_votes.insert(validator_key, vote); 
+            store.latest_new_votes.insert(validator_key, vote);
         }
     }
 }
