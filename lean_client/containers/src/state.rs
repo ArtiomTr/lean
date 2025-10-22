@@ -31,13 +31,13 @@ pub struct State {
     pub historical_block_hashes: Vec<Bytes32>,
 
     // --- flattened justification tracking ---
+    // Flattened votes vector. Not all fields are required from grandine ssz
     #[ssz(skip)]
     #[serde(skip)]
     pub justified_slots: Vec<bool>,
     #[ssz(skip)]
     #[serde(skip)]
     pub justifications_roots: Vec<Bytes32>,
-    // Flattened votes vector. Enforced by logic/tests to not exceed limits.
     #[ssz(skip)]
     #[serde(skip)]
     pub justifications_validators: Vec<bool>,

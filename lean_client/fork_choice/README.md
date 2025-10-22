@@ -3,6 +3,9 @@ Implemented based on the [forkchoice.md](https://github.com/leanEthereum/leanSpe
 
 Tests taken from the [testing part of the repository](https://github.com/leanEthereum/leanSpec/tree/main/tests/lean_spec/subspecs/forkchoice).
 
+Use kebab-case when running tests.
+Run tests with `cargo test -p fork-choice`
+
 # Implementation
 
 ## Helpers
