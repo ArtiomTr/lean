@@ -80,81 +80,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
-name = "alloy-consensus"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da374e868f54c7f4ad2ad56829827badca388efd645f8cf5fccc61c2b5343504"
-dependencies = [
- "alloy-eips",
- "alloy-primitives 0.7.7",
- "alloy-rlp 0.3.12",
- "c-kzg",
-]
-
-[[package]]
-name = "alloy-eips"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f76ecab54890cdea1e4808fc0891c7e6cfcf71fe1a9fe26810c7280ef768f4ed"
-dependencies = [
- "alloy-primitives 0.7.7",
- "alloy-rlp 0.3.12",
- "c-kzg",
- "once_cell",
- "serde",
- "sha2 0.10.9 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
-name = "alloy-primitives"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a317569918dd9e0fd3efd36a63bf81bffe764ca70ccdd6505943dccbf3e3032"
-dependencies = [
- "alloy-rlp 0.1.0",
- "bytes",
- "const-hex",
- "derive_more 0.99.20",
- "itoa",
- "proptest",
- "ruint2",
- "serde",
- "tiny-keccak",
-]
-
-[[package]]
-name = "alloy-primitives"
-version = "0.7.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccb3ead547f4532bc8af961649942f0b9c16ee9226e26caa3f38420651cc0bf4"
-dependencies = [
- "alloy-rlp 0.3.12",
- "bytes",
- "cfg-if",
- "const-hex",
- "derive_more 0.99.20",
- "hex-literal 0.4.1",
- "itoa",
- "k256 0.13.4",
- "keccak-asm",
- "proptest",
- "rand 0.8.5",
- "ruint",
- "serde",
- "tiny-keccak",
-]
-
-[[package]]
 name = "alloy-primitives"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b77f7d5e60ad8ae6bd2200b8097919712a07a6db622a4b201e7ead6166f02e5"
 dependencies = [
- "alloy-rlp 0.3.12",
+ "alloy-rlp",
  "bytes",
  "cfg-if",
  "const-hex",
- "derive_more 2.0.1",
+ "derive_more",
  "foldhash 0.2.0",
  "hashbrown 0.16.0",
  "indexmap 2.11.4",
@@ -173,46 +108,12 @@ dependencies = [
 
 [[package]]
 name = "alloy-rlp"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1735b2db0470f8fa299dfbbb16606a93241354a533132610f511cd4fa36a27f"
-dependencies = [
- "alloy-rlp-derive 0.1.0",
- "arrayvec",
- "bytes",
-]
-
-[[package]]
-name = "alloy-rlp"
 version = "0.3.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5f70d83b765fdc080dbcd4f4db70d8d23fe4761f2f02ebfa9146b833900634b4"
 dependencies = [
- "alloy-rlp-derive 0.3.12",
  "arrayvec",
  "bytes",
-]
-
-[[package]]
-name = "alloy-rlp-derive"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98d157647d80c41cf6b938c3ae1d146d9bd82d5111d258d24d5ab4bc11316c70"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.106",
-]
-
-[[package]]
-name = "alloy-rlp-derive"
-version = "0.3.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64b728d511962dda67c1bc7ea7c03736ec275ed2cf4c35d9585298ac9ccf3b73"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.106",
 ]
 
 [[package]]
@@ -762,18 +663,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "blst"
-version = "0.3.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dcdb4c7013139a150f9fc55d123186dbfaba0d912817466282c73ac49e71fb45"
-dependencies = [
- "cc",
- "glob",
- "threadpool",
- "zeroize",
-]
-
-[[package]]
 name = "bs58"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -811,24 +700,6 @@ name = "bytes"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "c-kzg"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0307f72feab3300336fb803a57134159f6e20139af1357f36c54cb90d8e8928"
-dependencies = [
- "blst",
- "cc",
- "glob",
- "hex",
- "libc",
- "once_cell",
- "serde",
-]
 
 [[package]]
 name = "cc"
@@ -1016,12 +887,6 @@ dependencies = [
  "ssz_derive",
  "typenum",
 ]
-
-[[package]]
-name = "convert_case"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6245d59a3e82a7fc217c5828a6692dbc6dfb63a0c8c90495621f7b9d79704a0e"
 
 [[package]]
 name = "convert_case"
@@ -1291,19 +1156,6 @@ dependencies = [
 
 [[package]]
 name = "derive_more"
-version = "0.99.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6edb4b64a43d977b8e99788fe3a04d483834fba1215a7e02caa415b626497f7f"
-dependencies = [
- "convert_case 0.4.0",
- "proc-macro2",
- "quote",
- "rustc_version 0.4.1",
- "syn 2.0.106",
-]
-
-[[package]]
-name = "derive_more"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "093242cf7570c207c83073cf82f79706fe7b8317e98620a47d5be7c3d8497678"
@@ -1317,7 +1169,7 @@ version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bda628edc44c4bb645fbe0f758797143e4e07926f7ebf4e9bdfbd3d2ce621df3"
 dependencies = [
- "convert_case 0.7.1",
+ "convert_case",
  "proc-macro2",
  "quote",
  "syn 2.0.106",
@@ -1983,7 +1835,7 @@ source = "git+https://github.com/grandinetech/grandine?branch=develop#ca3faea411
 dependencies = [
  "ethereum-types",
  "generic-array",
- "hex-literal 1.0.0",
+ "hex-literal",
  "sha2 0.10.9 (git+https://github.com/grandinetech/universal-precompiles.git?tag=sha2-v0.10.9-up.0)",
 ]
 
@@ -2016,12 +1868,6 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 dependencies = [
  "serde",
 ]
-
-[[package]]
-name = "hex-literal"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fe2267d4ed49bc07b63801559be28c718ea06c4738b7a03c94df7386d2cde46"
 
 [[package]]
 name = "hex-literal"
@@ -2590,33 +2436,8 @@ dependencies = [
  "clap",
  "containers",
  "fork_choice",
- "lean_tests",
- "libp2p",
- "log",
  "networking",
  "tokio",
- "validator",
-]
-
-[[package]]
-name = "lean_tests"
-version = "0.1.0"
-dependencies = [
- "alloy-consensus",
- "alloy-primitives 0.1.0",
- "anyhow",
- "containers",
- "paste",
- "pretty_assertions",
- "rstest",
- "serde",
- "serde_json",
- "serde_yaml",
- "snap",
- "ssz",
- "ssz_derive",
- "tokio",
- "typenum",
 ]
 
 [[package]]
@@ -3342,7 +3163,7 @@ dependencies = [
 name = "networking"
 version = "0.1.0"
 dependencies = [
- "alloy-primitives 1.4.0",
+ "alloy-primitives",
  "anyhow",
  "async-trait",
  "containers",
@@ -4159,7 +3980,7 @@ version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a68df0380e5c9d20ce49534f292a36a7514ae21350726efe1865bdb1fa91d278"
 dependencies = [
- "alloy-rlp 0.3.12",
+ "alloy-rlp",
  "ark-ff 0.3.0",
  "ark-ff 0.4.2",
  "ark-ff 0.5.0",
@@ -4186,26 +4007,6 @@ name = "ruint-macro"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48fd7bd8a6377e15ad9d42a8ec25371b94ddc67abe7c8b9127bec79bebaaae18"
-
-[[package]]
-name = "ruint2"
-version = "1.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b066b8e4fcea7fae86b6932d2449670b6b5545b7e8407841b2d3a916ff2a9f86"
-dependencies = [
- "alloy-rlp 0.1.0",
- "derive_more 0.99.20",
- "ruint2-macro",
- "rustc_version 0.4.1",
- "serde",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "ruint2-macro"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89dc553bc0cf4512a8b96caa2e21ed5f6e4b66bf28a1bd08fd9eb07c0b39b28c"
 
 [[package]]
 name = "rustc-demangle"
@@ -4694,7 +4495,7 @@ dependencies = [
  "bitvec",
  "byteorder",
  "derivative",
- "derive_more 2.0.1",
+ "derive_more",
  "easy-ext",
  "ethereum-types",
  "generic-array",
@@ -4892,15 +4693,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.106",
-]
-
-[[package]]
-name = "threadpool"
-version = "1.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d050e60b33d41c19108b32cea32164033a9013fe3b46cbd4457559bfbf77afaa"
-dependencies = [
- "num_cpus",
 ]
 
 [[package]]
