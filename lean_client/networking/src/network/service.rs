@@ -23,12 +23,11 @@ use libp2p::{
 use libp2p_identity::{Keypair, PeerId, secp256k1};
 use parking_lot::Mutex;
 use tokio::select;
-use tracing::{info, trace, warn};
+use tracing::{info, warn};
 
 use crate::{
     bootnodes::BootnodeSource,
     compressor::Compressor,
-    executor::{Executor, TaskExecutor},
     gossipsub::{self, config::GossipsubConfig, message::GossipsubMessage, topic::GossipsubKind},
     network::behaviour::{LeanNetworkBehaviour, LeanNetworkBehaviourEvent},
     req_resp::{self, ReqRespMessage},
@@ -38,25 +37,23 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub struct LeanNetworkConfig {
+pub struct NetworkServiceConfig {
     pub gossipsub_config: GossipsubConfig,
     pub socket_address: IpAddr,
     pub socket_port: u16,
-    pub private_key_path: Option<PathBuf>,
     pub request_response_protocols: Vec<String>,
 }
 
-impl LeanNetworkConfig {
+impl NetworkServiceConfig {
     pub fn new(
         gossipsub_config: GossipsubConfig,
         socket_address: IpAddr,
         socket_port: u16,
     ) -> Self {
-        LeanNetworkConfig {
+        NetworkServiceConfig {
             gossipsub_config,
             socket_address,
             socket_port,
-            private_key_path: None,
             request_response_protocols: Vec::new(),
         }
     }
@@ -67,7 +64,7 @@ impl LeanNetworkConfig {
 }
 
 #[derive(Debug)]
-pub enum LeanNetworkEvent {
+pub enum NetworkEvent {
     PeerConnectedIncoming(PeerId),
     PeerConnectedOutgoing(PeerId),
     PeerDisconnected(PeerId),
@@ -77,73 +74,33 @@ pub enum LeanNetworkEvent {
     DisconnectPeer(PeerId),
 }
 
-pub struct LeanNetworkService<C, R>
+pub struct NetworkService<R>
 where
-    C: ChainMessageSink<ChainMessage> + Send + Sync + 'static,
     R: P2pRequestSource<OutboundP2pRequest> + Send + 'static,
 {
-    network_config: Arc<LeanNetworkConfig>,
+    network_config: Arc<NetworkServiceConfig>,
     swarm: Swarm<LeanNetworkBehaviour>,
     peer_table: Arc<Mutex<HashMap<PeerId, ConnectionState>>>,
-    chain_message_sink: C,
     outbound_p2p_requests: R,
 }
 
-impl<C, R> LeanNetworkService<C, R>
+impl<R> NetworkService<R>
 where
-    C: ChainMessageSink<ChainMessage> + Send + Sync + 'static,
     R: P2pRequestSource<OutboundP2pRequest> + Send + 'static,
 {
-    pub async fn new<E: TaskExecutor>(
-        network_config: Arc<LeanNetworkConfig>,
-        executor: E,
-        chain_message_sink: C,
+    pub async fn new(
+        network_config: Arc<NetworkServiceConfig>,
         outbound_p2p_requests: R,
     ) -> Result<Self> {
-        let connection_limits = {
-            let limits = ConnectionLimits::default()
-                .with_max_pending_incoming(Some(5))
-                .with_max_pending_outgoing(Some(16))
-                .with_max_established_per_peer(Some(2));
+        let local_key = Keypair::generate_secp256k1();
+        let behaviour = Self::build_behaviour(&local_key, &network_config)?;
 
-            connection_limits::Behaviour::new(limits)
-        };
-
-        let local_key = load_or_generate_local_key(network_config.private_key_path.as_ref())?;
-
-        let gossipsub = gossipsub::GossipsubBehaviour::new_with_transform(
-            MessageAuthenticity::Anonymous,
-            network_config.gossipsub_config.config.clone(),
-            Compressor::default(),
-        )
-        .map_err(|err| anyhow!("failed to create gossipsub behaviour: {err:?}"))?;
-
-        let identify = build_identify(&local_key);
-
-        let request_protocols = if network_config.request_response_protocols.is_empty() {
-            vec!["/lean/req/1".to_string()]
-        } else {
-            network_config.request_response_protocols.clone()
-        };
-
-        let req_resp = req_resp::build(request_protocols);
-
-        let behaviour = LeanNetworkBehaviour {
-            identify,
-            req_resp,
-            gossipsub,
-            connection_limits,
-        };
-
-        let config = Config::with_executor(Executor(executor))
-            .with_notify_handler_buffer_size(NonZeroUsize::new(7).expect("non-zero"))
+        let config = Config::with_tokio_executor()
+            .with_notify_handler_buffer_size(NonZeroUsize::new(7).unwrap())
             .with_per_connection_event_buffer_size(4)
-            .with_dial_concurrency_factor(NonZeroU8::new(1).expect("non-zero"));
+            .with_dial_concurrency_factor(NonZeroU8::new(1).unwrap());
 
-        let mut multi_addr: Multiaddr = network_config.socket_address.into();
-        multi_addr.push(Protocol::Udp(network_config.socket_port));
-        multi_addr.push(Protocol::QuicV1);
-
+        let multiaddr = Self::multiaddr(&network_config)?;
         let swarm = SwarmBuilder::with_existing_identity(local_key.clone())
             .with_tokio()
             .with_quic()
@@ -151,29 +108,15 @@ where
             .with_swarm_config(|_| config)
             .build();
 
-        let mut service = LeanNetworkService {
+        let mut service = Self {
             network_config,
             swarm,
             peer_table: Arc::new(Mutex::new(HashMap::new())),
-            chain_message_sink,
             outbound_p2p_requests,
         };
 
-        service
-            .swarm
-            .listen_on(multi_addr.clone())
-            .map_err(|err| anyhow!("failed to start libp2p listen on {multi_addr:?}: {err:?}"))?;
-
-        info!(?multi_addr, "Listening on");
-
-        for topic in &service.network_config.gossipsub_config.topics {
-            service
-                .swarm
-                .behaviour_mut()
-                .gossipsub
-                .subscribe(&IdentTopic::from(topic.clone()))
-                .map_err(|err| anyhow!("subscribe to {topic:?} failed: {err:?}"))?;
-        }
+        service.listen(&multiaddr)?;
+        service.subscribe_to_topics()?;
 
         Ok(service)
     }
@@ -182,10 +125,7 @@ where
     where
         B: BootnodeSource,
     {
-        info!("LeanNetworkService started");
-
         self.connect_to_peers(bootnodes.to_multiaddrs()).await;
-
         loop {
             select! {
                 request = self.outbound_p2p_requests.recv() => {
@@ -205,7 +145,7 @@ where
     async fn parse_swarm_event(
         &mut self,
         event: SwarmEvent<LeanNetworkBehaviourEvent>,
-    ) -> Option<LeanNetworkEvent> {
+    ) -> Option<NetworkEvent> {
         match event {
             SwarmEvent::Behaviour(LeanNetworkBehaviourEvent::Gossipsub(event)) => {
                 self.handle_gossipsub_event(event).await
@@ -227,7 +167,7 @@ where
                     .insert(peer_id, ConnectionState::Disconnected);
 
                 info!(peer = %peer_id, "Disconnected from peer");
-                Some(LeanNetworkEvent::PeerDisconnected(peer_id))
+                Some(NetworkEvent::PeerDisconnected(peer_id))
             }
             SwarmEvent::IncomingConnection { local_addr, .. } => {
                 info!(?local_addr, "Incoming connection");
@@ -235,7 +175,7 @@ where
             }
             SwarmEvent::Dialing { peer_id, .. } => {
                 info!(?peer_id, "Dialing peer");
-                peer_id.map(LeanNetworkEvent::PeerConnectedOutgoing)
+                peer_id.map(NetworkEvent::PeerConnectedOutgoing)
             }
             SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
                 warn!(?peer_id, ?error, "Failed to connect to peer");
@@ -245,30 +185,14 @@ where
         }
     }
 
-    async fn handle_gossipsub_event(&mut self, event: GossipsubEvent) -> Option<LeanNetworkEvent> {
+    async fn handle_gossipsub_event(&mut self, event: GossipsubEvent) -> Option<NetworkEvent> {
         if let GossipsubEvent::Message { message, .. } = event {
             match GossipsubMessage::decode(&message.topic, &message.data) {
                 Ok(GossipsubMessage::Block(signed_block)) => {
-                    let slot = signed_block.message.slot.0;
-
-                    if let Err(err) = self
-                        .chain_message_sink
-                        .send(ChainMessage::block(signed_block))
-                        .await
-                    {
-                        warn!(slot = slot, error = %err, "failed to forward block to chain");
-                    }
+                    info!("block");
                 }
                 Ok(GossipsubMessage::Vote(signed_vote)) => {
-                    let slot = signed_vote.data.slot.0;
-
-                    if let Err(err) = self
-                        .chain_message_sink
-                        .send(ChainMessage::vote(signed_vote))
-                        .await
-                    {
-                        warn!(slot = slot, error = %err, "failed to forward vote to chain");
-                    }
+                    info!("vote");
                 }
                 Err(err) => warn!(%err, "gossip decode failed"),
             }
@@ -279,12 +203,12 @@ where
     fn handle_request_response_event(
         &mut self,
         _event: ReqRespMessage,
-    ) -> Option<LeanNetworkEvent> {
+    ) -> Option<NetworkEvent> {
         None
     }
 
     async fn connect_to_peers(&mut self, peers: Vec<Multiaddr>) {
-        trace!(?peers, "Discovered peers");
+        info!(?peers, "Discovered peers");
         for peer in peers {
             if let Some(Protocol::P2p(peer_id)) = peer
                 .iter()
@@ -368,35 +292,63 @@ where
     pub fn swarm_mut(&mut self) -> &mut Swarm<LeanNetworkBehaviour> {
         &mut self.swarm
     }
-}
 
-fn load_or_generate_local_key(path: Option<&PathBuf>) -> Result<Keypair> {
-    if let Some(path) = path {
-        let private_key_hex = fs::read_to_string(path)
-            .map_err(|err| anyhow!("failed to read secret key file {}: {err}", path.display()))?;
-        let private_key_bytes = hex::decode(private_key_hex.trim()).map_err(|err| {
-            anyhow!(
-                "failed to decode hex from private key file {}: {err}",
-                path.display()
-            )
-        })?;
-        let private_key_array: [u8; 32] = private_key_bytes
-            .try_into()
-            .map_err(|_| anyhow!("invalid secret key length"))?;
-        let private_key = secp256k1::SecretKey::try_from_bytes(private_key_array)
-            .map_err(|err| anyhow!("failed to decode secp256k1 secret key from bytes: {err}"))?;
+    fn build_behaviour(local_key: &Keypair, cfg: &NetworkServiceConfig) -> Result<LeanNetworkBehaviour> {
+        let identify = Self::build_identify(local_key);
+        let gossipsub = gossipsub::GossipsubBehaviour::new_with_transform(
+            MessageAuthenticity::Anonymous,
+            cfg.gossipsub_config.config.clone(),
+            Compressor::default(),
+        )
+            .map_err(|err| anyhow!("Failed to create gossipsub behaviour: {err:?}"))?;
 
-        Ok(Keypair::from(secp256k1::Keypair::from(private_key)))
-    } else {
-        Ok(Keypair::generate_secp256k1())
+        let req_resp = req_resp::build(
+            if cfg.request_response_protocols.is_empty() {
+                vec!["/lean/req/1".to_string()]
+            } else {
+                cfg.request_response_protocols.clone()
+            }
+        );
+
+        let connection_limits = connection_limits::Behaviour::new(
+            ConnectionLimits::default()
+                .with_max_pending_incoming(Some(5))
+                .with_max_pending_outgoing(Some(16))
+                .with_max_established_per_peer(Some(2)),
+        );
+
+        Ok(LeanNetworkBehaviour { identify, req_resp, gossipsub, connection_limits })
     }
-}
 
-fn build_identify(local_key: &Keypair) -> identify::Behaviour {
-    let local_public_key = local_key.public();
-    let identify_config = identify::Config::new("eth2/1.0.0".into(), local_public_key.clone())
-        .with_agent_version("0.0.1".to_string())
-        .with_cache_size(0);
+    fn build_identify(local_key: &Keypair) -> identify::Behaviour {
+        let local_public_key = local_key.public();
+        let identify_config = identify::Config::new("eth2/1.0.0".into(), local_public_key.clone())
+            .with_agent_version("0.0.1".to_string())
+            .with_cache_size(0);
 
-    identify::Behaviour::new(identify_config)
+        identify::Behaviour::new(identify_config)
+    }
+
+    fn multiaddr(cfg: &NetworkServiceConfig) -> Result<Multiaddr> {
+        let mut addr: Multiaddr = cfg.socket_address.into();
+        addr.push(Protocol::Udp(cfg.socket_port));
+        addr.push(Protocol::QuicV1);
+        Ok(addr)
+    }
+
+    fn listen(&mut self, addr: &Multiaddr) -> Result<()> {
+        self.swarm.listen_on(addr.clone())
+            .map_err(|e| anyhow!("Failed to listen on {addr:?}: {e:?}"))?;
+        info!(?addr, "Listening on");
+        Ok(())
+    }
+
+    fn subscribe_to_topics(&mut self) -> Result<()> {
+        for topic in &self.network_config.gossipsub_config.topics {
+            self.swarm.behaviour_mut().gossipsub
+                .subscribe(&IdentTopic::from(topic.clone()))
+                .map_err(|e| anyhow!("Subscribe failed for {topic:?}: {e:?}"))?;
+        }
+        Ok(())
+    }
 }

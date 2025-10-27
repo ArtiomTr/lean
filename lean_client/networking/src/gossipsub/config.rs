@@ -13,8 +13,8 @@ pub struct GossipsubConfig {
 
 impl GossipsubConfig {
     pub fn new() -> Self {
-        let justification_lookback_slots = 3;
-        let seconds_per_slot = 1000;
+        let justification_lookback_slots = 3; // TODO: load
+        let seconds_per_slot = 12; // TODO: load
         let config = ConfigBuilder::default()
             .fanout_ttl(Duration::from_secs(60))
             .history_length(5) // = mcache_len

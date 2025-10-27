@@ -47,7 +47,7 @@ impl GossipsubTopic {
 
         if parts.len() != 4 {
             return Err(format!(
-                "Invalid topic format (expected 4 parts): {topic:?}"
+                "Invalid topic part count: {topic:?}"
             ));
         }
 
@@ -56,7 +56,7 @@ impl GossipsubTopic {
 
     fn validate_parts(parts: &[&str], topic: &TopicHash) -> Result<(), String> {
         if parts[0] != TOPIC_PREFIX || parts[3] != SSZ_SNAPPY_ENCODING_POSTFIX {
-            return Err(format!("Invalid topic structure: {topic:?}"));
+            return Err(format!("Invalid topic parts: {topic:?}"));
         }
         Ok(())
     }
