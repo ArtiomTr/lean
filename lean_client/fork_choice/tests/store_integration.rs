@@ -1,14 +1,11 @@
-/*
- * AI Slop tests
- *
- */
+// Tests generated using AI, manual changes coming...
 
-mod test_functions;
-use test_functions::*;
+mod common;
+use common::*;
 
 use fork_choice::{
     handlers::{on_attestation, on_block, on_tick},
-    helpers::{get_forkchoice_store, SECONDS_PER_SLOT},
+    store::{get_forkchoice_store, SECONDS_PER_SLOT},
 };
 
 use containers::{

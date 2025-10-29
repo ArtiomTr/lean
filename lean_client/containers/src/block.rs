@@ -1,8 +1,8 @@
-use crate::{Bytes32, Slot,  SignedVote, ValidatorIndex};
-use ssz::PersistentList as List;
-use ssz::{SszHash};
-use ssz_derive::Ssz;
+use crate::{Bytes32, SignedVote, Slot, ValidatorIndex};
 use serde::{Deserialize, Serialize};
+use ssz::PersistentList as List;
+use ssz::SszHash;
+use ssz_derive::Ssz;
 use typenum::U4096;
 
 #[derive(Clone, Debug, PartialEq, Eq, Ssz, Default, Serialize, Deserialize)]
@@ -40,4 +40,3 @@ pub fn hash_tree_root<T: ssz::SszHash>(value: &T) -> Bytes32 {
     let h = value.hash_tree_root();
     Bytes32(h)
 }
-

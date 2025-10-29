@@ -1,13 +1,10 @@
-/*
- *  AI Slop tests
- *
- */
+// Tests generated using AI, manual changes coming...
 
 use containers::{Root, ValidatorIndex};
-use fork_choice::helpers::{get_fork_choice_head, Store};
+use fork_choice::store::{get_fork_choice_head, Store};
 use std::collections::HashMap;
-mod test_functions;
-use test_functions::*;
+mod common;
+use common::*;
 
 #[test]
 fn test_fc_no_votes_follows_longest_chain() {

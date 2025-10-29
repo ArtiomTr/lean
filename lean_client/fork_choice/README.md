@@ -3,36 +3,16 @@ Implemented based on the [forkchoice.md](https://github.com/leanEthereum/leanSpe
 
 Tests taken from the [testing part of the repository](https://github.com/leanEthereum/leanSpec/tree/main/tests/lean_spec/subspecs/forkchoice).
 
-Use kebab-case when running tests.
 Run tests with `cargo test -p fork-choice`
 
 # Implementation
 
-## Helpers
+## Store
 
-`get_fork_choice_head`
+Main object of fork-choice.
 
-`get_latest_justified`
+Use `get_fork_choice_head`
 
-`Store`
 
-`get_forkchoice_store`
-
-`update_head`
-
-`update_safe_target`
-
-`get_vote_target`
-
-`accept_new_votes`
-
-`tick_interval`
-
-`get_proposal_head`
 
 ## Handlers
-`on_tick`
-
-`on_attestation`
-
-`on_block`
