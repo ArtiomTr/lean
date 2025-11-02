@@ -80,7 +80,7 @@ impl std::fmt::Display for GossipsubTopic {
             f,
             "/{}/{}/{}/{}",
             TOPIC_PREFIX,
-            self.fork.encode_hex(),
+            self.fork,
             self.kind,
             SSZ_SNAPPY_ENCODING_POSTFIX
         )
@@ -108,7 +108,7 @@ impl From<GossipsubTopic> for TopicHash {
         TopicHash::from_raw(format!(
             "/{}/{}/{}/{}",
             TOPIC_PREFIX,
-            val.fork.encode_hex(),
+            val.fork,
             kind_str,
             SSZ_SNAPPY_ENCODING_POSTFIX
         ))

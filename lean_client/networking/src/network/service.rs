@@ -213,17 +213,29 @@ where
     }
 
     async fn handle_gossipsub_event(&mut self, event: Event) -> Option<NetworkEvent> {
-        if let Event::Message { message, .. } = event {
-            match GossipsubMessage::decode(&message.topic, &message.data) {
-                Ok(GossipsubMessage::Block(signed_block)) => {
-                    info!("block");
-                }
-                Ok(GossipsubMessage::Vote(signed_vote)) => {
-                    info!("vote");
-                }
-                Err(err) => warn!(%err, "gossip decode failed"),
+        match event {
+            Event::Subscribed { peer_id, topic } => {
+                info!(peer = %peer_id, topic = %topic, "A peer subscribed to topic");
             }
-        }
+            Event::Unsubscribed { peer_id, topic } => {
+                info!(peer = %peer_id, topic = %topic, "A peer unsubscribed from topic");
+            }
+
+            Event::Message { message, .. } => {
+                match GossipsubMessage::decode(&message.topic, &message.data) {
+                    Ok(GossipsubMessage::Block(signed_block)) => {
+                        info!("block");
+                    }
+                    Ok(GossipsubMessage::Vote(signed_vote)) => {
+                        info!("vote");
+                    }
+                    Err(err) => warn!(%err, "gossip decode failed"),
+                }
+            }
+            _ => {
+                info!(?event, "Unhandled gossipsub event");
+            }
+        }        
         None
     }
 
@@ -248,6 +260,7 @@ where
                     protocols = info.protocols.len(),
                     "Received peer info"
                 );
+
                 None
             }
             identify::Event::Sent { peer_id, connection_id: _ } => {
@@ -400,6 +413,7 @@ where
             self.swarm.behaviour_mut().gossipsub
                 .subscribe(&IdentTopic::from(topic.clone()))
                 .map_err(|e| anyhow!("Subscribe failed for {topic:?}: {e:?}"))?;
+            info!(topic = %topic, "Subscribed to topic");
         }
         Ok(())
     }
