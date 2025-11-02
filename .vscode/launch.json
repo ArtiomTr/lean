@@ -21,10 +21,7 @@
             "env": {
                 "RUST_LOG": "info"
             },
-            "cwd": "${workspaceFolder}",
-            "exitCommands": ["process kill", "quit"],  // ← Kill process BEFORE quitting
-            "console": "integratedTerminal",
-            "postDebugTask": "cleanup"
+            "cwd": "${workspaceFolder}"
         }
     ]
 }
