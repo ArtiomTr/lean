@@ -1,5 +1,4 @@
 // tests/state_transition.rs
-/*
 use containers::{block::{Block, SignedBlock, hash_tree_root}, state::State, types::{Bytes32, Uint64}, Slot};
 use pretty_assertions::assert_eq;
 use rstest::fixture;
@@ -11,7 +10,7 @@ use common::{create_block, sample_config};
 #[fixture]
 fn genesis_state() -> State {
     let config = sample_config();
-    State::generate_genesis(Uint64(config.genesis_time), Uint64(config.num_validators))
+    State::generate_genesis(Uint64(config.genesis_time), Uint64(4))
 }
 
 #[test]
@@ -25,7 +24,7 @@ fn test_state_transition_full() {
     let expected_state = state_at_slot_1.process_block(&block.clone());
 
     let block_with_correct_root = Block {
-    state_root: hash_tree_root(&expected_state),
+        state_root: hash_tree_root(&expected_state),
         ..block
     };
 
@@ -51,7 +50,7 @@ fn test_state_transition_invalid_signatures() {
     let expected_state = state_at_slot_1.process_block(&block.clone());
 
     let block_with_correct_root = Block {
-    state_root: hash_tree_root(&expected_state),
+        state_root: hash_tree_root(&expected_state),
         ..block
     };
 
@@ -81,4 +80,3 @@ fn test_state_transition_bad_state_root() {
 
     state.state_transition(final_signed_block, true);
 }
-    */

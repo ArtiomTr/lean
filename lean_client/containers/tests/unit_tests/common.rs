@@ -1,12 +1,11 @@
-/* 
 use containers::{
     block::{Block, BlockBody, BlockHeader, SignedBlock, hash_tree_root},
     checkpoint::Checkpoint,
-    config::Config,
+    ContainerConfig,
     slot::Slot,
     state::State,
     types::{Bytes32, ValidatorIndex},
-    vote::{SignedVote},
+    vote::SignedVote,
 };
 use ssz::PersistentList as List;
 use typenum::U4096;
@@ -15,20 +14,20 @@ pub const DEVNET_CONFIG_VALIDATOR_REGISTRY_LIMIT: usize = 1 << 12; // 4096
 
 pub fn create_block(slot: u64, parent_header: &mut BlockHeader, votes: Option<List<SignedVote, U4096>>) -> SignedBlock {
     let body = BlockBody {
-    attestations: votes.unwrap_or_else(List::default),
+        attestations: votes.unwrap_or_else(List::default),
     };
 
     let block_message = Block {
         slot: Slot(slot),
         proposer_index: ValidatorIndex(slot % 10),
-    parent_root: hash_tree_root(parent_header),
-    state_root: Bytes32(ssz::H256::zero()),
+        parent_root: hash_tree_root(parent_header),
+        state_root: Bytes32(ssz::H256::zero()),
         body,
     };
 
     SignedBlock {
         message: block_message,
-    signature: Bytes32(ssz::H256::zero()),
+        signature: Bytes32(ssz::H256::zero()),
     }
 }
 
@@ -59,7 +58,7 @@ pub fn sample_checkpoint() -> Checkpoint {
     }
 }
 
-pub fn base_state(config: Config) -> State {
+pub fn base_state(config: ContainerConfig) -> State {
     use containers::{HistoricalBlockHashes, JustificationRoots, JustifiedSlots, JustificationsValidators};
     State {
         config,
@@ -75,9 +74,8 @@ pub fn base_state(config: Config) -> State {
     }
 }
 
-pub fn sample_config() -> Config {
-    Config {
+pub fn sample_config() -> ContainerConfig {
+    ContainerConfig {
         genesis_time: 0,
     }
 }
-    */

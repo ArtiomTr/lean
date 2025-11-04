@@ -54,10 +54,14 @@ impl State {
             body_root: hash_tree_root(&body_for_root),
         };
         
-        // Create validators list (empty for now, but sized correctly)
+        //TEMP: Create validators list with dummy validators
         let mut validators = List::default();
-        // In a real implementation, we'd populate with actual validators
-        // For now, we just track the count via the list
+        for _ in 0..num_validators.0 {
+            let validator = Validator {
+                pubkey: crate::validator::BlsPublicKey::default(),
+            };
+            validators.push(validator).expect("Failed to add validator");
+        }
         
         Self {
             config: ContainerConfig { genesis_time: genesis_time.0 },
@@ -394,7 +398,13 @@ impl State {
 
         new_state.latest_justified = latest_justified;
         new_state.latest_finalized = latest_finalized;
-        new_state.justified_slots = justified_slots;
+        
+        // Convert justified_slots_working Vec back to BitList
+        let mut new_justified_slots = JustifiedSlots::with_length(justified_slots_working.len());
+        for (i, &val) in justified_slots_working.iter().enumerate() {
+            new_justified_slots.set(i, val);
+        }
+        new_state.justified_slots = new_justified_slots;
 
         new_state
     }
