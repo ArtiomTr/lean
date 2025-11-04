@@ -178,6 +178,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2 0.10.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "ssz",
  "ssz_derive",
  "typenum",
@@ -557,7 +558,7 @@ dependencies = [
  "ethereum-types",
  "generic-array",
  "hex-literal",
- "sha2",
+ "sha2 0.10.9 (git+https://github.com/grandinetech/universal-precompiles.git?tag=sha2-v0.10.9-up.0)",
 ]
 
 [[package]]
@@ -1212,6 +1213,17 @@ dependencies = [
  "ryu",
  "serde",
  "unsafe-libyaml",
+]
+
+[[package]]
+name = "sha2"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest",
 ]
 
 [[package]]

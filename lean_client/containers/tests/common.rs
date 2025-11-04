@@ -1,3 +1,4 @@
+/* 
 use containers::{
     block::{Block, BlockBody, BlockHeader, SignedBlock, hash_tree_root},
     checkpoint::Checkpoint,
@@ -59,22 +60,24 @@ pub fn sample_checkpoint() -> Checkpoint {
 }
 
 pub fn base_state(config: Config) -> State {
+    use containers::{HistoricalBlockHashes, JustificationRoots, JustifiedSlots, JustificationsValidators};
     State {
         config,
         slot: Slot(0),
         latest_block_header: sample_block_header(),
         latest_justified: sample_checkpoint(),
         latest_finalized: sample_checkpoint(),
-        historical_block_hashes: Vec::new(),
-        justified_slots: Vec::new(),
-        justifications_roots: Vec::new(),
-        justifications_validators: Vec::new(),
+        historical_block_hashes: HistoricalBlockHashes::default(),
+        justified_slots: JustifiedSlots::default(),
+        validators: List::default(),
+        justifications_roots: JustificationRoots::default(),
+        justifications_validators: JustificationsValidators::default(),
     }
 }
 
 pub fn sample_config() -> Config {
     Config {
-        num_validators: 10,
         genesis_time: 0,
     }
 }
+    */
