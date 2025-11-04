@@ -3,28 +3,28 @@
         "network": "Devnet",
         "pre": {
             "config": {
-                "genesis_time": 0
+                "genesisTime": 0
             },
             "slot": 0,
-            "latest_block_header": {
+            "latestBlockHeader": {
                 "slot": 0,
-                "proposer_index": 0,
-                "parent_root": "0x0000000000000000000000000000000000000000000000000000000000000000",
-                "state_root": "0x0000000000000000000000000000000000000000000000000000000000000000",
-                "body_root": "0xdba9671bac9513c9482f1416a53aabd2c6ce90d5a5f865ce5a55c775325c9136"
+                "proposerIndex": 0,
+                "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "stateRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "bodyRoot": "0xdba9671bac9513c9482f1416a53aabd2c6ce90d5a5f865ce5a55c775325c9136"
             },
-            "latest_justified": {
+            "latestJustified": {
                 "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
                 "slot": 0
             },
-            "latest_finalized": {
+            "latestFinalized": {
                 "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
                 "slot": 0
             },
-            "historical_block_hashes": {
+            "historicalBlockHashes": {
                 "data": []
             },
-            "justified_slots": {
+            "justifiedSlots": {
                 "data": []
             },
             "validators": {
@@ -43,10 +43,10 @@
                     }
                 ]
             },
-            "justifications_roots": {
+            "justificationsRoots": {
                 "data": []
             },
-            "justifications_validators": {
+            "justificationsValidators": {
                 "data": []
             }
         },
@@ -67,11 +67,11 @@
             "slot": 1
         },
         "_info": {
-            "hash": "0xcd426e2508e073577e8230fe0c5aca1b6cd1d151574360c83089a63c01cde06e",
+            "hash": "0xe62d25ff2baeab4a11708294f614c38c9e4f964f74908e4ea53c5352bc40848a",
             "comment": "`leanSpec` generated test",
-            "test-id": "tests/consensus/devnet/stf_examples/test_blocks.py::test_single_empty_block[fork_Devnet]",
+            "testId": "tests/consensus/devnet/stf_examples/test_blocks.py::test_single_empty_block[fork_Devnet]",
             "description": "Test processing a single empty block (no attestations).\n\nThis is the simplest possible block processing test.\nUses default pre-state (auto-injected).",
-            "fixture-format": "state_transition_test"
+            "fixtureFormat": "state_transition_test"
         }
     }
 }

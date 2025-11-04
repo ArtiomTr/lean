@@ -1,30 +1,30 @@
 {
-    "tests/consensus/devnet/fc_examples/test_head_selection.py::test_head_advances_with_sequential_blocks[fork_Devnet][fork_devnet-fork_choice_test]": {
+    "tests/consensus/devnet/fc/test_attestation_target_selection.py::test_attestation_target_at_genesis_initially[fork_Devnet][fork_devnet-fork_choice_test]": {
         "network": "Devnet",
         "anchorState": {
             "config": {
-                "genesis_time": 0
+                "genesisTime": 0
             },
             "slot": 0,
-            "latest_block_header": {
+            "latestBlockHeader": {
                 "slot": 0,
-                "proposer_index": 0,
-                "parent_root": "0x0000000000000000000000000000000000000000000000000000000000000000",
-                "state_root": "0x0000000000000000000000000000000000000000000000000000000000000000",
-                "body_root": "0xdba9671bac9513c9482f1416a53aabd2c6ce90d5a5f865ce5a55c775325c9136"
+                "proposerIndex": 0,
+                "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "stateRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "bodyRoot": "0xdba9671bac9513c9482f1416a53aabd2c6ce90d5a5f865ce5a55c775325c9136"
             },
-            "latest_justified": {
+            "latestJustified": {
                 "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
                 "slot": 0
             },
-            "latest_finalized": {
+            "latestFinalized": {
                 "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
                 "slot": 0
             },
-            "historical_block_hashes": {
+            "historicalBlockHashes": {
                 "data": []
             },
-            "justified_slots": {
+            "justifiedSlots": {
                 "data": []
             },
             "validators": {
@@ -43,18 +43,18 @@
                     }
                 ]
             },
-            "justifications_roots": {
+            "justificationsRoots": {
                 "data": []
             },
-            "justifications_validators": {
+            "justificationsValidators": {
                 "data": []
             }
         },
         "anchorBlock": {
             "slot": 0,
-            "proposer_index": 0,
-            "parent_root": "0x0000000000000000000000000000000000000000000000000000000000000000",
-            "state_root": "0x259dd6c91f2bab3b338fd2b4d9a6d8f8e678bc7d75590f96f323c5e82843e913",
+            "proposerIndex": 0,
+            "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "stateRoot": "0x259dd6c91f2bab3b338fd2b4d9a6d8f8e678bc7d75590f96f323c5e82843e913",
             "body": {
                 "attestations": {
                     "data": []
@@ -65,9 +65,10 @@
             {
                 "valid": true,
                 "checks": {
-                    "head_slot": 1
+                    "headSlot": 1,
+                    "attestationTargetSlot": 0
                 },
-                "step_type": "block",
+                "stepType": "block",
                 "block": {
                     "slot": 1,
                     "proposer_index": 1,
@@ -83,9 +84,10 @@
             {
                 "valid": true,
                 "checks": {
-                    "head_slot": 2
+                    "headSlot": 2,
+                    "attestationTargetSlot": 0
                 },
-                "step_type": "block",
+                "stepType": "block",
                 "block": {
                     "slot": 2,
                     "proposer_index": 2,
@@ -100,11 +102,11 @@
             }
         ],
         "_info": {
-            "hash": "0x56714cdd810a3838ba195aa1e89bdddb3af11c39c46a90c9cb01d3bd2c14aa38",
+            "hash": "0xe63f64fb5ce1ffc1d2aaf0527e2f651d7d808e48f5afa6fbbffc07da9c6543ad",
             "comment": "`leanSpec` generated test",
-            "test-id": "tests/consensus/devnet/fc_examples/test_head_selection.py::test_head_advances_with_sequential_blocks[fork_Devnet]",
-            "description": "Test head selection advances through sequential blocks.\n\nEach new block should become the new head since there are no forks.",
-            "fixture-format": "fork_choice_test"
+            "testId": "tests/consensus/devnet/fc/test_attestation_target_selection.py::test_attestation_target_at_genesis_initially[fork_Devnet]",
+            "description": "Attestation target starts at genesis before safe target updates.\n\nScenario\n--------\nProcess two blocks at slots 1 and 2.\n\nExpected:\n    - After slot 1: target = slot 0 (genesis/finalized)\n    - After slot 2: target = slot 0 (genesis/finalized)\n    - Target root automatically validated against block at slot 0\n\nWhy This Matters\n----------------\nInitially, the safe target is at genesis (slot 0), so the attestation\ntarget walks back from head to genesis.\n\nThis conservative behavior ensures validators don't attest too far ahead\nbefore there's sufficient attestation weight to advance the safe target.",
+            "fixtureFormat": "fork_choice_test"
         }
     }
 }

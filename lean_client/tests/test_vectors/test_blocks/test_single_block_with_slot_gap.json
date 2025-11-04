@@ -3,28 +3,28 @@
         "network": "Devnet",
         "pre": {
             "config": {
-                "genesis_time": 0
+                "genesisTime": 0
             },
             "slot": 0,
-            "latest_block_header": {
+            "latestBlockHeader": {
                 "slot": 0,
-                "proposer_index": 0,
-                "parent_root": "0x0000000000000000000000000000000000000000000000000000000000000000",
-                "state_root": "0x0000000000000000000000000000000000000000000000000000000000000000",
-                "body_root": "0xdba9671bac9513c9482f1416a53aabd2c6ce90d5a5f865ce5a55c775325c9136"
+                "proposerIndex": 0,
+                "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "stateRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "bodyRoot": "0xdba9671bac9513c9482f1416a53aabd2c6ce90d5a5f865ce5a55c775325c9136"
             },
-            "latest_justified": {
+            "latestJustified": {
                 "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
                 "slot": 0
             },
-            "latest_finalized": {
+            "latestFinalized": {
                 "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
                 "slot": 0
             },
-            "historical_block_hashes": {
+            "historicalBlockHashes": {
                 "data": []
             },
-            "justified_slots": {
+            "justifiedSlots": {
                 "data": []
             },
             "validators": {
@@ -43,10 +43,10 @@
                     }
                 ]
             },
-            "justifications_roots": {
+            "justificationsRoots": {
                 "data": []
             },
-            "justifications_validators": {
+            "justificationsValidators": {
                 "data": []
             }
         },
@@ -67,11 +67,11 @@
             "slot": 5
         },
         "_info": {
-            "hash": "0x4133e22a13a8e19a335e4aeb7dfa5e8527093aa43c69b1c5d704bed028f92f2e",
+            "hash": "0x70f5d3f155495aea2bd3a2d99aff7442f4acae2bbeb46a9978629a031d063eae",
             "comment": "`leanSpec` generated test",
-            "test-id": "tests/consensus/devnet/stf_examples/test_blocks.py::test_single_block_with_slot_gap[fork_Devnet]",
+            "testId": "tests/consensus/devnet/stf_examples/test_blocks.py::test_single_block_with_slot_gap[fork_Devnet]",
             "description": "Test processing a block with empty slots before it. Uses default pre-state.",
-            "fixture-format": "state_transition_test"
+            "fixtureFormat": "state_transition_test"
         }
     }
 }
