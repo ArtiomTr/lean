@@ -415,6 +415,8 @@ name = "fork-choice"
 version = "0.1.0"
 dependencies = [
  "containers",
+ "serde",
+ "serde_json",
  "ssz",
  "ssz_derive",
  "ssz_rs",

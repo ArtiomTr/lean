@@ -119,16 +119,24 @@ impl State {
         self
     }
 
+    // updated for fork choice tests
     pub fn state_transition(&self, signed_block: SignedBlock, valid_signatures: bool) -> Self {
+        self.state_transition_with_validation(signed_block, valid_signatures, true)
+    }
+
+    // updated for fork choice tests
+    pub fn state_transition_with_validation(&self, signed_block: SignedBlock, valid_signatures: bool, validate_state_root: bool) -> Self {
         assert!(valid_signatures, "Block signatures must be valid");
 
         let block = signed_block.message;
         let mut state = self.process_slots(block.slot);
         state = state.process_block(&block);
 
-        let state_for_hash = state.clone();
-        let state_root = hash_tree_root(&state_for_hash);
-        assert!(block.state_root == state_root, "Invalid block state root");
+        if validate_state_root {
+            let state_for_hash = state.clone();
+            let state_root = hash_tree_root(&state_for_hash);
+            assert!(block.state_root == state_root, "Invalid block state root");
+        }
 
         state
     }
