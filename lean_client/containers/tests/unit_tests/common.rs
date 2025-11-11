@@ -5,16 +5,16 @@ use containers::{
     slot::Slot,
     state::State,
     types::{Bytes32, ValidatorIndex},
-    vote::SignedVote,
+    SignedAttestation,
 };
 use ssz::PersistentList as List;
 use typenum::U4096;
 
 pub const DEVNET_CONFIG_VALIDATOR_REGISTRY_LIMIT: usize = 1 << 12; // 4096
 
-pub fn create_block(slot: u64, parent_header: &mut BlockHeader, votes: Option<List<SignedVote, U4096>>) -> SignedBlock {
+pub fn create_block(slot: u64, parent_header: &mut BlockHeader, attestations: Option<List<SignedAttestation, U4096>>) -> SignedBlock {
     let body = BlockBody {
-        attestations: votes.unwrap_or_else(List::default),
+        attestations: attestations.unwrap_or_else(List::default),
     };
 
     let block_message = Block {
@@ -27,18 +27,18 @@ pub fn create_block(slot: u64, parent_header: &mut BlockHeader, votes: Option<Li
 
     SignedBlock {
         message: block_message,
-        signature: Bytes32(ssz::H256::zero()),
+        signature: ssz::ByteVector::default(),
     }
 }
 
-pub fn create_votes(indices: &[usize]) -> Vec<bool> {
-    let mut votes = vec![false; DEVNET_CONFIG_VALIDATOR_REGISTRY_LIMIT];
+pub fn create_attestations(indices: &[usize]) -> Vec<bool> {
+    let mut attestations = vec![false; DEVNET_CONFIG_VALIDATOR_REGISTRY_LIMIT];
     for &index in indices {
-        if index < votes.len() {
-            votes[index] = true;
+        if index < attestations.len() {
+            attestations[index] = true;
         }
     }
-    votes
+    attestations
 }
 
 pub fn sample_block_header() -> BlockHeader {

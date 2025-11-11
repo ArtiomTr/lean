@@ -223,11 +223,11 @@ where
 
             Event::Message { message, .. } => {
                 match GossipsubMessage::decode(&message.topic, &message.data) {
-                    Ok(GossipsubMessage::Block(signed_block)) => {
+                    Ok(GossipsubMessage::Block(_signed_block)) => {
                         info!("block");
                     }
-                    Ok(GossipsubMessage::Vote(signed_vote)) => {
-                        info!("vote");
+                    Ok(GossipsubMessage::Attestation(_signed_attestation)) => {
+                        info!("attestation");
                     }
                     Err(err) => warn!(%err, "gossip decode failed"),
                 }
@@ -316,18 +316,18 @@ where
                     }
                 }
             }
-            OutboundP2pRequest::GossipVote(signed_vote) => {
-                let slot = signed_vote.message.slot.0;
-                match signed_vote.to_ssz() {
+            OutboundP2pRequest::GossipAttestation(signed_attestation) => {
+                let slot = signed_attestation.message.data.slot.0;
+                match signed_attestation.to_ssz() {
                     Ok(bytes) => {
-                        if let Err(err) = self.publish_to_topic(GossipsubKind::Vote, bytes) {
-                            warn!(slot = slot, ?err, "Publish vote failed");
+                        if let Err(err) = self.publish_to_topic(GossipsubKind::Attestation, bytes) {
+                            warn!(slot = slot, ?err, "Publish attestation failed");
                         } else {
-                            info!(slot = slot, "Broadcasted vote");
+                            info!(slot = slot, "Broadcasted attestation");
                         }
                     }
                     Err(err) => {
-                        warn!(slot = slot, ?err, "Serialize vote failed");
+                        warn!(slot = slot, ?err, "Serialize attestation failed");
                     }
                 }
             }

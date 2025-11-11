@@ -5,7 +5,7 @@ pub const TOPIC_PREFIX: &str = "leanconsensus";
 pub const SSZ_SNAPPY_ENCODING_POSTFIX: &str = "ssz_snappy";
 
 pub const BLOCK_TOPIC: &str = "block";
-pub const VOTE_TOPIC: &str = "vote";
+pub const ATTESTATION_TOPIC: &str = "attestation";
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct GossipsubTopic {
@@ -16,7 +16,7 @@ pub struct GossipsubTopic {
 #[derive(Debug, Hash, Clone, Copy, PartialEq, Eq)]
 pub enum GossipsubKind {
     Block,
-    Vote,
+    Attestation,
 }
 
 pub fn get_topics(fork: String) -> Vec<GossipsubTopic> {
@@ -27,7 +27,7 @@ pub fn get_topics(fork: String) -> Vec<GossipsubTopic> {
         },
         GossipsubTopic {
             fork: fork.clone(),
-            kind: GossipsubKind::Vote,
+            kind: GossipsubKind::Attestation,
         },
     ]
 }
@@ -68,7 +68,7 @@ impl GossipsubTopic {
     fn extract_kind(parts: &[&str]) -> Result<GossipsubKind, String> {
         match parts[2] {
             BLOCK_TOPIC => Ok(GossipsubKind::Block),
-            VOTE_TOPIC => Ok(GossipsubKind::Vote),
+            ATTESTATION_TOPIC => Ok(GossipsubKind::Attestation),
             other => Err(format!("Invalid topic kind: {other:?}")),
         }
     }
@@ -103,7 +103,7 @@ impl From<GossipsubTopic> for TopicHash {
     fn from(val: GossipsubTopic) -> Self {
         let kind_str = match &val.kind {
             GossipsubKind::Block => BLOCK_TOPIC,
-            GossipsubKind::Vote => VOTE_TOPIC,
+            GossipsubKind::Attestation => ATTESTATION_TOPIC,
         };
         TopicHash::from_raw(format!(
             "/{}/{}/{}/{}",
@@ -119,7 +119,7 @@ impl std::fmt::Display for GossipsubKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             GossipsubKind::Block => write!(f, "{BLOCK_TOPIC}"),
-            GossipsubKind::Vote => write!(f, "{VOTE_TOPIC}"),
+            GossipsubKind::Attestation => write!(f, "{ATTESTATION_TOPIC}"),
         }
     }
 }
