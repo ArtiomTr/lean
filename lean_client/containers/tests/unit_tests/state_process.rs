@@ -5,8 +5,7 @@ use containers::{
     slot::Slot,
     state::State,
     types::{Bytes32, Uint64, ValidatorIndex},
-    vote::{SignedVote, Vote},
-    ssz::ByteVector,
+    Attestation, AttestationData,
 };
 use pretty_assertions::assert_eq;
 use rstest::{fixture, rstest};
@@ -136,26 +135,25 @@ fn test_process_attestations_justification_and_finalization() {
         slot: Slot(4),
     };
 
-    let votes_for_4: Vec<SignedVote> = (0..7)
-        .map(|i| SignedVote {
+    let attestations_for_4: Vec<Attestation> = (0..7)
+        .map(|i| Attestation {
             validator_id: Uint64(i),
-            message: Vote {
+            data: AttestationData {
                 slot: Slot(4),
                 head: checkpoint4.clone(),
                 target: checkpoint4.clone(),
                 source: genesis_checkpoint.clone(),
             },
-            signature: ByteVector::default(),
         })
         .collect();
 
     // Convert Vec to PersistentList
-    let mut votes_list: List<_, U4096> = List::default();
-    for v in votes_for_4 { 
-        votes_list.push(v).unwrap(); 
+    let mut attestations_list: List<_, U4096> = List::default();
+    for a in attestations_for_4 { 
+        attestations_list.push(a).unwrap(); 
     }
 
-    let new_state = state.process_attestations(&votes_list);
+    let new_state = state.process_attestations(&attestations_list);
 
     assert_eq!(new_state.latest_justified, checkpoint4);
     let justified_slot_4 = new_state.justified_slots.get(4).map(|b| *b).unwrap_or(false);
