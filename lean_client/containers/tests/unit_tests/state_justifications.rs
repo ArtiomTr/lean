@@ -11,7 +11,7 @@ use ssz::PersistentList as List;
 #[path = "common.rs"]
 mod common;
 use common::{
-    base_state, create_votes, sample_config, DEVNET_CONFIG_VALIDATOR_REGISTRY_LIMIT,
+    base_state, create_attestations, sample_config, DEVNET_CONFIG_VALIDATOR_REGISTRY_LIMIT,
 };
 
 #[fixture]
@@ -173,26 +173,26 @@ fn test_with_justifications_invalid_length() {
 #[case::empty_justifications(std::collections::BTreeMap::new())]
 #[case::single_root({
     let mut map = std::collections::BTreeMap::new();
-    map.insert(Bytes32(ssz::H256::from_slice(&[1u8; 32])), create_votes(&[0]));
+    map.insert(Bytes32(ssz::H256::from_slice(&[1u8; 32])), create_attestations(&[0]));
     map
 })]
 #[case::multiple_roots_sorted({
     let mut map = std::collections::BTreeMap::new();
-    map.insert(Bytes32(ssz::H256::from_slice(&[1u8; 32])), create_votes(&[0]));
-    map.insert(Bytes32(ssz::H256::from_slice(&[2u8; 32])), create_votes(&[1, 2]));
+    map.insert(Bytes32(ssz::H256::from_slice(&[1u8; 32])), create_attestations(&[0]));
+    map.insert(Bytes32(ssz::H256::from_slice(&[2u8; 32])), create_attestations(&[1, 2]));
     map
 })]
 #[case::multiple_roots_unsorted({
     let mut map = std::collections::BTreeMap::new();
-    map.insert(Bytes32(ssz::H256::from_slice(&[2u8; 32])), create_votes(&[1, 2]));
-    map.insert(Bytes32(ssz::H256::from_slice(&[1u8; 32])), create_votes(&[0]));
+    map.insert(Bytes32(ssz::H256::from_slice(&[2u8; 32])), create_attestations(&[1, 2]));
+    map.insert(Bytes32(ssz::H256::from_slice(&[1u8; 32])), create_attestations(&[0]));
     map
 })]
 #[case::complex_unsorted({
     let mut map = std::collections::BTreeMap::new();
     map.insert(Bytes32(ssz::H256::from_slice(&[3u8; 32])), vec![true; DEVNET_CONFIG_VALIDATOR_REGISTRY_LIMIT]);
-    map.insert(Bytes32(ssz::H256::from_slice(&[1u8; 32])), create_votes(&[0]));
-    map.insert(Bytes32(ssz::H256::from_slice(&[2u8; 32])), create_votes(&[1, 2]));
+    map.insert(Bytes32(ssz::H256::from_slice(&[1u8; 32])), create_attestations(&[0]));
+    map.insert(Bytes32(ssz::H256::from_slice(&[2u8; 32])), create_attestations(&[1, 2]));
     map
 })]
 fn test_justifications_roundtrip(

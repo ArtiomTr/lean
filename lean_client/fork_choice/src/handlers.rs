@@ -1,9 +1,5 @@
 use crate::store::*;
-use containers::{
-    block::SignedBlock,
-    vote::SignedVote,
-    ValidatorIndex,
-};
+use containers::{attestation::Attestation, block::SignedBlock, ValidatorIndex};
 
 #[inline]
 pub fn on_tick(store: &mut Store, time: u64, _has_proposal: bool) {
@@ -15,8 +11,8 @@ pub fn on_tick(store: &mut Store, time: u64, _has_proposal: bool) {
 }
 
 #[inline]
-pub fn on_attestation(store: &mut Store, attestation: SignedVote, is_from_block: bool) {
-    let key_vald = ValidatorIndex(attestation.data.validator_id.0);
+pub fn on_attestation(store: &mut Store, attestation: Attestation, is_from_block: bool) {
+    let key_vald = ValidatorIndex(attestation.validator_id.0);
     let vote = attestation.data.target;
 
     let curr_slot = store.time / INTERVALS_PER_SLOT;

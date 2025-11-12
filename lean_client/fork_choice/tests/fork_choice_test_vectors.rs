@@ -4,11 +4,11 @@ use fork_choice::{
 };
 
 use containers::{
+    attestation::{Attestation, AttestationData, Signature},
     block::{hash_tree_root, Block, BlockBody, BlockHeader, SignedBlock},
     checkpoint::Checkpoint,
     config::Config,
     state::State,
-    vote::{SignedVote, Vote},
     Bytes32, Slot, Uint64, ValidatorIndex,
 };
 
@@ -191,16 +191,15 @@ fn convert_test_checkpoint(test_cp: &TestCheckpoint) -> Checkpoint {
     }
 }
 
-fn convert_test_attestation(test_att: &TestAttestation) -> SignedVote {
-    SignedVote {
-        data: Vote {
-            validator_id: Uint64(test_att.validator_id),
+fn convert_test_attestation(test_att: &TestAttestation) -> Attestation {
+    Attestation {
+        validator_id: Uint64(test_att.validator_id),
+        data: AttestationData {
             slot: Slot(test_att.slot),
             head: convert_test_checkpoint(&test_att.head),
             target: convert_test_checkpoint(&test_att.target),
             source: convert_test_checkpoint(&test_att.source),
         },
-        signature: Bytes32::default(),
     }
 }
 
@@ -222,7 +221,7 @@ fn convert_test_anchor_block(test_block: &TestAnchorBlock) -> SignedBlock {
             state_root: parse_root(&test_block.state_root),
             body: BlockBody { attestations },
         },
-        signature: Bytes32::default(),
+        signature: Signature::default(),
     }
 }
 
@@ -244,7 +243,7 @@ fn convert_test_block(test_block: &TestBlock) -> SignedBlock {
             state_root: parse_root(&test_block.state_root),
             body: BlockBody { attestations },
         },
-        signature: Bytes32::default(),
+        signature: Signature::default(),
     }
 }
 

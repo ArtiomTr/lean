@@ -1,10 +1,10 @@
+pub mod block_processing;
 pub mod runner;
 pub mod state_transition;
-pub mod block_processing;
 pub mod vote_processing;
 
-use serde::{Deserialize, Serialize};
 use crate::*;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TestCase<T> {
@@ -12,7 +12,7 @@ pub struct TestCase<T> {
     pub pre: T,
     pub post: Option<T>,
     pub blocks: Option<Vec<SignedBlock>>,
-    pub votes: Option<Vec<SignedVote>>,
+    pub votes: Option<Vec<Attestation>>,
     pub valid: bool,
 }
 

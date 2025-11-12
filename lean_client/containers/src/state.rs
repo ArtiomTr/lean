@@ -1,7 +1,7 @@
 use crate::validator::Validator;
 use crate::{
     block::{hash_tree_root, Block, BlockBody, BlockHeader, SignedBlock},
-    Bytes32, Checkpoint, Config, SignedVote, Slot, Uint64, ValidatorIndex,
+    Attestation, Attestations, Bytes32, Checkpoint, Config, Slot, Uint64, ValidatorIndex,
 };
 use crate::{HistoricalBlockHashes, JustificationRoots, JustificationsValidators, JustifiedSlots};
 use serde::{Deserialize, Serialize};
@@ -328,7 +328,7 @@ impl State {
         self.process_attestations(&body.attestations)
     }
 
-    pub fn process_attestations(&self, attestations: &List<SignedVote, typenum::U4096>) -> Self {
+    pub fn process_attestations(&self, attestations: &Attestations) -> Self {
         let mut justifications = self.get_justifications();
         let mut latest_justified = self.latest_justified.clone();
         let mut latest_finalized = self.latest_finalized.clone();
@@ -336,7 +336,7 @@ impl State {
 
         // PersistentList doesn't expose iter; convert to Vec for simple iteration for now
         // Build a temporary Vec by probing sequentially until index error
-        let mut votes_vec: Vec<SignedVote> = Vec::new();
+        let mut votes_vec: Vec<Attestation> = Vec::new();
         let mut i: u64 = 0;
         loop {
             match attestations.get(i) {
@@ -352,8 +352,8 @@ impl State {
             justified_slots_working.push(justified_slots.get(i).map(|b| *b).unwrap_or(false));
         }
 
-        for signed_vote in votes_vec.iter() {
-            let vote = signed_vote.data.clone();
+        for attestation in votes_vec.iter() {
+            let vote = attestation.data.clone();
             let target_slot = vote.target.slot;
             let source_slot = vote.source.slot;
             let target_root = vote.target.root;
@@ -407,7 +407,7 @@ impl State {
                 justifications.insert(target_root, vec![false; limit]);
             }
 
-            let validator_id = vote.validator_id.0 as usize;
+            let validator_id = attestation.validator_id.0 as usize;
             if let Some(votes) = justifications.get_mut(&target_root) {
                 if validator_id < votes.len() && !votes[validator_id] {
                     votes[validator_id] = true;
