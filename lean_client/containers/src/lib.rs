@@ -12,8 +12,9 @@ pub use attestation::{
     Attestation, AttestationData, SignedAttestation,
     AggregatedAttestations, SignedAggregatedAttestations,
     AggregationBits, AggregatedSignatures, Signature,
+    Attestations, BlockSignatures,
 };
-pub use block::{Block, BlockBody, BlockHeader, SignedBlock};
+pub use block::{Block, BlockBody, BlockHeader, SignedBlock, BlockWithAttestation, SignedBlockWithAttestation};
 pub use checkpoint::Checkpoint;
 pub use config::Config as ContainerConfig;
 pub use slot::Slot;

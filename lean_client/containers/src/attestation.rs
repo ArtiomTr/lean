@@ -13,6 +13,14 @@ pub type Signature = ByteVector<U3100>;
 // Type-level number for 4096 (validator registry limit)
 use typenum::U4096;
 
+/// List of validator attestations included in a block (without signatures).
+/// Limit is VALIDATOR_REGISTRY_LIMIT (4096).
+pub type Attestations = ssz::PersistentList<Attestation, U4096>;
+
+/// List of signatures corresponding to attestations in a block.
+/// Limit is VALIDATOR_REGISTRY_LIMIT (4096).
+pub type BlockSignatures = ssz::PersistentList<Signature, U4096>;
+
 /// Bitlist representing validator participation in an attestation.
 /// Limit is VALIDATOR_REGISTRY_LIMIT (4096).
 pub type AggregationBits = ssz::BitList<U4096>;

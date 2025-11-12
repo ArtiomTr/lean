@@ -5,8 +5,7 @@ use containers::{
     slot::Slot,
     state::State,
     types::{Bytes32, Uint64, ValidatorIndex},
-    Attestation, AttestationData, SignedAttestation,
-    ssz::ByteVector,
+    Attestation, AttestationData,
 };
 use pretty_assertions::assert_eq;
 use rstest::{fixture, rstest};
@@ -136,18 +135,15 @@ fn test_process_attestations_justification_and_finalization() {
         slot: Slot(4),
     };
 
-    let attestations_for_4: Vec<SignedAttestation> = (0..7)
-        .map(|i| SignedAttestation {
-            message: Attestation {
-                validator_id: Uint64(i),
-                data: AttestationData {
-                    slot: Slot(4),
-                    head: checkpoint4.clone(),
-                    target: checkpoint4.clone(),
-                    source: genesis_checkpoint.clone(),
-                },
+    let attestations_for_4: Vec<Attestation> = (0..7)
+        .map(|i| Attestation {
+            validator_id: Uint64(i),
+            data: AttestationData {
+                slot: Slot(4),
+                head: checkpoint4.clone(),
+                target: checkpoint4.clone(),
+                source: genesis_checkpoint.clone(),
             },
-            signature: ByteVector::default(),
         })
         .collect();
 

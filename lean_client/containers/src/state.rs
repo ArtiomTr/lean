@@ -1,4 +1,4 @@
-use crate::{Bytes32, Checkpoint, ContainerConfig, Slot, Uint64, ValidatorIndex, block::{Block, BlockBody, BlockHeader, SignedBlock, hash_tree_root}, SignedAttestation};
+use crate::{Attestation, Attestations, Bytes32, Checkpoint, ContainerConfig, Slot, Uint64, ValidatorIndex, block::{Block, BlockBody, BlockHeader, SignedBlock, hash_tree_root}};
 use crate::{HistoricalBlockHashes, JustificationRoots, JustifiedSlots, JustificationsValidators};
 use crate::validator::Validator;
 use ssz::PersistentList as List;
@@ -281,7 +281,7 @@ impl State {
         self.process_attestations(&body.attestations)
     }
 
-    pub fn process_attestations(&self, attestations: &List<SignedAttestation, typenum::U4096>) -> Self {
+    pub fn process_attestations(&self, attestations: &Attestations) -> Self {
         let mut justifications = self.get_justifications();
         let mut latest_justified = self.latest_justified.clone();
         let mut latest_finalized = self.latest_finalized.clone();
@@ -289,7 +289,7 @@ impl State {
 
         // PersistentList doesn't expose iter; convert to Vec for simple iteration for now
         // Build a temporary Vec by probing sequentially until index error
-        let mut attestations_vec: Vec<SignedAttestation> = Vec::new();
+        let mut attestations_vec: Vec<Attestation> = Vec::new();
         let mut i: u64 = 0;
         loop {
             match attestations.get(i) {
@@ -305,8 +305,8 @@ impl State {
             justified_slots_working.push(justified_slots.get(i).map(|b| *b).unwrap_or(false));
         }
 
-        for signed_attestation in attestations_vec.iter() {
-                let attestation_data = signed_attestation.message.data.clone();
+        for attestation in attestations_vec.iter() {
+                let attestation_data = attestation.data.clone();
                 let target_slot = attestation_data.target.slot;
                 let source_slot = attestation_data.source.slot;
                 let target_root = attestation_data.target.root;
@@ -348,7 +348,7 @@ impl State {
                     justifications.insert(target_root, vec![false; limit]);
                 }
 
-                let validator_id = signed_attestation.message.validator_id.0 as usize;
+                let validator_id = attestation.validator_id.0 as usize;
                 if let Some(attestation_votes) = justifications.get_mut(&target_root) {
                     if validator_id < attestation_votes.len() && !attestation_votes[validator_id] {
                         attestation_votes[validator_id] = true;
