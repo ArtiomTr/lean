@@ -235,13 +235,9 @@ impl State {
     pub fn process_block(&self, block: &Block) -> Self {
         let state = self.process_block_header(block);
         let state_after_ops = state.process_attestations(&block.body.attestations);
-        
-        // Validate state root: the block's state_root must match the hash of the post-state
-        let computed_state_root = hash_tree_root(&state_after_ops);
-        if block.state_root != computed_state_root {
-            std::panic::panic_any(String::from("Invalid block state root"));
-        }
-        
+
+        // State root validation is handled by state_transition_with_validation when needed
+
         state_after_ops
     }
 

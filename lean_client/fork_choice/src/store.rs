@@ -193,7 +193,6 @@ fn is_descendant(store: &Store, ancestor: Root, descendant: Root) -> bool {
     false
 }
 
-// glue function
 fn reorg_new_head(
     store: &Store,
     current_head: Root,

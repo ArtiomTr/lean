@@ -116,9 +116,24 @@ struct TestBlockBody {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum TestAttestation {
+    Nested {
+        validator_id: u64,
+        data: TestAttestationData,
+    },
+    Flat {
+        validator_id: u64,
+        slot: u64,
+        head: TestCheckpoint,
+        target: TestCheckpoint,
+        source: TestCheckpoint,
+    },
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct TestAttestation {
-    validator_id: u64,
+struct TestAttestationData {
     slot: u64,
     head: TestCheckpoint,
     target: TestCheckpoint,
@@ -199,13 +214,30 @@ fn convert_test_checkpoint(test_cp: &TestCheckpoint) -> Checkpoint {
 }
 
 fn convert_test_attestation(test_att: &TestAttestation) -> Attestation {
+    let (validator_id, slot, head, target, source) = match test_att {
+        TestAttestation::Nested { validator_id, data } => (
+            *validator_id,
+            data.slot,
+            &data.head,
+            &data.target,
+            &data.source,
+        ),
+        TestAttestation::Flat {
+            validator_id,
+            slot,
+            head,
+            target,
+            source,
+        } => (*validator_id, *slot, head, target, source),
+    };
+
     Attestation {
-        validator_id: Uint64(test_att.validator_id),
+        validator_id: Uint64(validator_id),
         data: AttestationData {
-            slot: Slot(test_att.slot),
-            head: convert_test_checkpoint(&test_att.head),
-            target: convert_test_checkpoint(&test_att.target),
-            source: convert_test_checkpoint(&test_att.source),
+            slot: Slot(slot),
+            head: convert_test_checkpoint(head),
+            target: convert_test_checkpoint(target),
+            source: convert_test_checkpoint(source),
         },
     }
 }
