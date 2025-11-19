@@ -136,7 +136,7 @@ pub fn get_fork_choice_head(
                 let slot_b = store.blocks[&b].message.slot;
                 wa.cmp(&wb)
                     .then_with(|| slot_b.cmp(&slot_a))
-                    .then_with(|| b.cmp(&a))
+                    .then_with(|| a.cmp(&b))
             })
             .unwrap();
     }
@@ -158,10 +158,93 @@ pub fn update_head(store: &mut Store) {
     let mut combined_votes = store.latest_known_votes.clone();
     combined_votes.extend(store.latest_new_votes.clone());
 
-    store.head = get_fork_choice_head(store, store.latest_justified.root, &combined_votes, 0);
+    let current_head = store.head;
+    let new_head = get_fork_choice_head(store, store.latest_justified.root, &combined_votes, 0);
+
+    if new_head != current_head {
+        let is_extension = is_descendant(store, current_head, new_head);
+
+        if is_extension {
+            store.head = new_head;
+        } else {
+            let should_switch = reorg_new_head(store, current_head, new_head, &combined_votes);
+            if should_switch {
+                store.head = new_head;
+            }
+        }
+    }
 
     if let Some(state) = store.states.get(&store.head) {
         store.latest_finalized = state.latest_finalized.clone();
+    }
+}
+
+fn is_descendant(store: &Store, ancestor: Root, descendant: Root) -> bool {
+    let mut curr = descendant;
+    while let Some(block) = store.blocks.get(&curr) {
+        if curr == ancestor {
+            return true;
+        }
+        if block.message.parent_root.0.is_zero() {
+            return false;
+        }
+        curr = block.message.parent_root;
+    }
+    false
+}
+
+// glue function
+fn reorg_new_head(
+    store: &Store,
+    current_head: Root,
+    new_head: Root,
+    votes: &HashMap<ValidatorIndex, Checkpoint>,
+) -> bool {
+    let mut current_chain = vec![current_head];
+    let mut curr = current_head;
+    while let Some(block) = store.blocks.get(&curr) {
+        if block.message.parent_root.0.is_zero() {
+            break;
+        }
+        current_chain.push(block.message.parent_root);
+        curr = block.message.parent_root;
+    }
+
+    let mut new_chain = vec![new_head];
+    let mut curr = new_head;
+    while let Some(block) = store.blocks.get(&curr) {
+        if block.message.parent_root.0.is_zero() {
+            break;
+        }
+        new_chain.push(block.message.parent_root);
+        curr = block.message.parent_root;
+    }
+
+    let mut current_votes = 0;
+    let mut new_votes = 0;
+
+    for (_validator_idx, vote) in votes.iter() {
+        let on_current_fork = current_chain.contains(&vote.root);
+        let on_new_fork = new_chain.contains(&vote.root);
+
+        if on_current_fork && !on_new_fork {
+            current_votes += 1;
+        } else if on_new_fork && !on_current_fork {
+            new_votes += 1;
+        }
+    }
+
+    let current_len = current_chain.len();
+    let new_len = new_chain.len();
+
+    if current_votes == 0 {
+        true
+    } else if new_len > current_len {
+        true
+    } else if new_votes == votes.len() {
+        true
+    } else {
+        false
     }
 }
 
