@@ -1,4 +1,3 @@
-use alloy_primitives::hex::ToHexExt;
 use libp2p::gossipsub::{IdentTopic, TopicHash};
 
 pub const TOPIC_PREFIX: &str = "leanconsensus";
@@ -15,7 +14,7 @@ pub struct GossipsubTopic {
 
 #[derive(Debug, Hash, Clone, Copy, PartialEq, Eq)]
 pub enum GossipsubKind {
-    BlockWithAttestation,
+    Block,
     Attestation,
 }
 
@@ -23,7 +22,7 @@ pub fn get_topics(fork: String) -> Vec<GossipsubTopic> {
     vec![
         GossipsubTopic {
             fork: fork.clone(),
-            kind: GossipsubKind::BlockWithAttestation,
+            kind: GossipsubKind::Block,
         },
         GossipsubTopic {
             fork: fork.clone(),
@@ -67,7 +66,7 @@ impl GossipsubTopic {
 
     fn extract_kind(parts: &[&str]) -> Result<GossipsubKind, String> {
         match parts[2] {
-            BLOCK_TOPIC => Ok(GossipsubKind::BlockWithAttestation),
+            BLOCK_TOPIC => Ok(GossipsubKind::Block),
             ATTESTATION_TOPIC => Ok(GossipsubKind::Attestation),
             other => Err(format!("Invalid topic kind: {other:?}")),
         }
@@ -102,7 +101,7 @@ impl From<GossipsubTopic> for String {
 impl From<GossipsubTopic> for TopicHash {
     fn from(val: GossipsubTopic) -> Self {
         let kind_str = match &val.kind {
-            GossipsubKind::BlockWithAttestation => BLOCK_TOPIC,
+            GossipsubKind::Block => BLOCK_TOPIC,
             GossipsubKind::Attestation => ATTESTATION_TOPIC,
         };
         TopicHash::from_raw(format!(
@@ -118,7 +117,7 @@ impl From<GossipsubTopic> for TopicHash {
 impl std::fmt::Display for GossipsubKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            GossipsubKind::BlockWithAttestation => write!(f, "{BLOCK_TOPIC}"),
+            GossipsubKind::Block => write!(f, "{BLOCK_TOPIC}"),
             GossipsubKind::Attestation => write!(f, "{ATTESTATION_TOPIC}"),
         }
     }

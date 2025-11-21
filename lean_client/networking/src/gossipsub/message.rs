@@ -6,14 +6,14 @@ use containers::{SignedAttestation};
 use libp2p::gossipsub::TopicHash;
 
 pub enum GossipsubMessage {
-    BlockWithAttestation(SignedBlockWithAttestation),
+    Block(SignedBlockWithAttestation),
     Attestation(SignedAttestation),
 }
 
 impl GossipsubMessage {
     pub fn decode(topic: &TopicHash, data: &[u8]) -> Result<Self, String> {
         match GossipsubTopic::decode(topic)?.kind {
-            GossipsubKind::BlockWithAttestation => Ok(Self::BlockWithAttestation(
+            GossipsubKind::Block => Ok(Self::Block(
                 SignedBlockWithAttestation::from_ssz_default(data).map_err(|e| format!("{:?}", e))?,
             )),
             GossipsubKind::Attestation => Ok(Self::Attestation(

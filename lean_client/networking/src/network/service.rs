@@ -227,7 +227,7 @@ where
 
             Event::Message { message, .. } => {
                 match GossipsubMessage::decode(&message.topic, &message.data) {
-                    Ok(GossipsubMessage::BlockWithAttestation(signed_block_with_attestation)) => {
+                    Ok(GossipsubMessage::Block(signed_block_with_attestation)) => {
                         let slot = signed_block_with_attestation.message.block.slot.0;
 
                         if let Err(err) = self.chain_message_sink
@@ -331,7 +331,7 @@ where
                 let slot = signed_block_with_attestation.message.block.slot.0;
                 match signed_block_with_attestation.to_ssz() {
                     Ok(bytes) => {
-                        if let Err(err) = self.publish_to_topic(GossipsubKind::BlockWithAttestation, bytes) {
+                        if let Err(err) = self.publish_to_topic(GossipsubKind::Block, bytes) {
                             warn!(slot = slot, ?err, "Publish block with attestation failed");
                         } else {
                             info!(slot = slot, "Broadcasted block with attestation");
