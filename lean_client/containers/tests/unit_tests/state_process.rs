@@ -5,8 +5,7 @@ use containers::{
     slot::Slot,
     state::State,
     types::{Bytes32, Uint64, ValidatorIndex},
-    vote::{SignedVote, Vote},
-    ssz::ByteVector,
+    Attestation, AttestationData,
 };
 use pretty_assertions::assert_eq;
 use rstest::{fixture, rstest};
@@ -116,12 +115,15 @@ fn test_process_attestations_justification_and_finalization() {
     // Process slot 1 and block
     let mut state_at_slot_1 = state.process_slots(Slot(1));
     let block1 = create_block(1, &mut state_at_slot_1.latest_block_header, None);
-    state = state_at_slot_1.process_block(&block1.message);
+    // Use process_block_header and process_operations separately to avoid state root validation
+    let state_after_header1 = state_at_slot_1.process_block_header(&block1.message);
+    state = state_after_header1.process_attestations(&block1.message.body.attestations);
 
     // Process slot 4 and block
     let mut state_at_slot_4 = state.process_slots(Slot(4));
     let block4 = create_block(4, &mut state_at_slot_4.latest_block_header, None);
-    state = state_at_slot_4.process_block(&block4.message);
+    let state_after_header4 = state_at_slot_4.process_block_header(&block4.message);
+    state = state_after_header4.process_attestations(&block4.message.body.attestations);
 
     // Advance to slot 5
     state = state.process_slots(Slot(5));
@@ -136,26 +138,25 @@ fn test_process_attestations_justification_and_finalization() {
         slot: Slot(4),
     };
 
-    let votes_for_4: Vec<SignedVote> = (0..7)
-        .map(|i| SignedVote {
+    let attestations_for_4: Vec<Attestation> = (0..7)
+        .map(|i| Attestation {
             validator_id: Uint64(i),
-            message: Vote {
+            data: AttestationData {
                 slot: Slot(4),
                 head: checkpoint4.clone(),
                 target: checkpoint4.clone(),
                 source: genesis_checkpoint.clone(),
             },
-            signature: ByteVector::default(),
         })
         .collect();
 
     // Convert Vec to PersistentList
-    let mut votes_list: List<_, U4096> = List::default();
-    for v in votes_for_4 { 
-        votes_list.push(v).unwrap(); 
+    let mut attestations_list: List<_, U4096> = List::default();
+    for a in attestations_for_4 { 
+        attestations_list.push(a).unwrap(); 
     }
 
-    let new_state = state.process_attestations(&votes_list);
+    let new_state = state.process_attestations(&attestations_list);
 
     assert_eq!(new_state.latest_justified, checkpoint4);
     let justified_slot_4 = new_state.justified_slots.get(4).map(|b| *b).unwrap_or(false);

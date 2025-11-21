@@ -1,12 +1,12 @@
 use crate::gossipsub::topic::GossipsubKind;
 use crate::gossipsub::topic::GossipsubTopic;
 use containers::ssz::SszReadDefault;
-use containers::{SignedBlock, SignedVote};
+use containers::{SignedBlock, SignedAttestation};
 use libp2p::gossipsub::TopicHash;
 
 pub enum GossipsubMessage {
     Block(SignedBlock),
-    Vote(SignedVote),
+    Attestation(SignedAttestation),
 }
 
 impl GossipsubMessage {
@@ -15,8 +15,8 @@ impl GossipsubMessage {
             GossipsubKind::Block => Ok(Self::Block(
                 SignedBlock::from_ssz_default(data).map_err(|e| format!("{:?}", e))?,
             )),
-            GossipsubKind::Vote => Ok(Self::Vote(
-                SignedVote::from_ssz_default(data).map_err(|e| format!("{:?}", e))?,
+            GossipsubKind::Attestation => Ok(Self::Attestation(
+                SignedAttestation::from_ssz_default(data).map_err(|e| format!("{:?}", e))?,
             )),
         }
     }

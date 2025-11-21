@@ -1,4 +1,4 @@
-use crate::{Bytes32, Checkpoint, ContainerConfig, Slot, Uint64, ValidatorIndex, block::{Block, BlockBody, BlockHeader, SignedBlock, hash_tree_root}, SignedVote};
+use crate::{Attestation, Attestations, Bytes32, Checkpoint, ContainerConfig, Slot, Uint64, ValidatorIndex, block::{Block, BlockBody, BlockHeader, SignedBlock, hash_tree_root}};
 use crate::{HistoricalBlockHashes, JustificationRoots, JustifiedSlots, JustificationsValidators};
 use crate::validator::Validator;
 use ssz::PersistentList as List;
@@ -202,7 +202,15 @@ impl State {
 
     pub fn process_block(&self, block: &Block) -> Self {
         let state = self.process_block_header(block);
-        state.process_operations(&block.body)
+        let state_after_ops = state.process_attestations(&block.body.attestations);
+        
+        // Validate state root: the block's state_root must match the hash of the post-state
+        let computed_state_root = hash_tree_root(&state_after_ops);
+        if block.state_root != computed_state_root {
+            std::panic::panic_any(String::from("Invalid block state root"));
+        }
+        
+        state_after_ops
     }
 
     pub fn process_block_header(&self, block: &Block) -> Self {
@@ -211,7 +219,7 @@ impl State {
         if !self.is_proposer(block.proposer_index) { std::panic::panic_any(String::from("Incorrect block proposer")); }
 
         // Create a mutable clone for hash computation
-        let latest_header_for_hash = self.latest_block_header.clone();
+        let latest_header_for_hash  = self.latest_block_header.clone();
         let parent_root = hash_tree_root(&latest_header_for_hash);
         if block.parent_root != parent_root { std::panic::panic_any(String::from("Block parent root mismatch")); }
 
@@ -277,11 +285,7 @@ impl State {
         }
     }
 
-    pub fn process_operations(&self, body: &BlockBody) -> Self {
-        self.process_attestations(&body.attestations)
-    }
-
-    pub fn process_attestations(&self, attestations: &List<SignedVote, typenum::U4096>) -> Self {
+    pub fn process_attestations(&self, attestations: &Attestations) -> Self {
         let mut justifications = self.get_justifications();
         let mut latest_justified = self.latest_justified.clone();
         let mut latest_finalized = self.latest_finalized.clone();
@@ -289,11 +293,11 @@ impl State {
 
         // PersistentList doesn't expose iter; convert to Vec for simple iteration for now
         // Build a temporary Vec by probing sequentially until index error
-        let mut votes_vec: Vec<SignedVote> = Vec::new();
+        let mut attestations_vec: Vec<Attestation> = Vec::new();
         let mut i: u64 = 0;
         loop {
             match attestations.get(i) {
-                Ok(v) => votes_vec.push(v.clone()),
+                Ok(a) => attestations_vec.push(a.clone()),
                 Err(_) => break,
             }
             i += 1;
@@ -305,12 +309,12 @@ impl State {
             justified_slots_working.push(justified_slots.get(i).map(|b| *b).unwrap_or(false));
         }
 
-        for signed_vote in votes_vec.iter() {
-                let vote = signed_vote.message.clone();
-                let target_slot = vote.target.slot;
-                let source_slot = vote.source.slot;
-                let target_root = vote.target.root;
-                let source_root = vote.source.root;
+        for attestation in attestations_vec.iter() {
+                let attestation_data = attestation.data.clone();
+                let target_slot = attestation_data.target.slot;
+                let source_slot = attestation_data.source.slot;
+                let target_root = attestation_data.target.root;
+                let source_root = attestation_data.source.root;
 
                 let target_slot_int = target_slot.0 as usize;
                 let source_slot_int = source_slot.0 as usize;
@@ -334,24 +338,24 @@ impl State {
                 let target_is_after_source = target_slot > source_slot;
                 let target_is_justifiable = target_slot.is_justifiable_after(latest_finalized.slot);
 
-                let is_valid_vote = source_is_justified &&
+                let is_valid_attestation = source_is_justified &&
                     !target_already_justified &&
                     source_root_matches_history &&
                     target_root_is_valid &&
                     target_is_after_source &&
                     target_is_justifiable;
 
-                if !is_valid_vote { continue; }
+                if !is_valid_attestation { continue; }
 
                 if !justifications.contains_key(&target_root) {
                     let limit = VALIDATOR_REGISTRY_LIMIT;
                     justifications.insert(target_root, vec![false; limit]);
                 }
 
-                let validator_id = signed_vote.validator_id.0 as usize;
-                if let Some(votes) = justifications.get_mut(&target_root) {
-                    if validator_id < votes.len() && !votes[validator_id] {
-                        votes[validator_id] = true;
+                let validator_id = attestation.validator_id.0 as usize;
+                if let Some(attestation_votes) = justifications.get_mut(&target_root) {
+                    if validator_id < attestation_votes.len() && !attestation_votes[validator_id] {
+                        attestation_votes[validator_id] = true;
 
                         // Count validators
                         let mut num_validators: u64 = 0;
@@ -366,9 +370,9 @@ impl State {
                             }
                         }
 
-                        let count = votes.iter().filter(|&&v| v).count();
+                        let count = attestation_votes.iter().filter(|&&v| v).count();
                         if 3 * count >= 2 * num_validators as usize {
-                            latest_justified = vote.target;
+                            latest_justified = attestation_data.target;
 
                             // Extend justified_slots_working if needed
                             while justified_slots_working.len() <= target_slot_int {
@@ -387,7 +391,7 @@ impl State {
                             }
 
                             if is_finalizable {
-                                latest_finalized = vote.source;
+                                latest_finalized = attestation_data.source;
                             }
                         }
                     }

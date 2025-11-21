@@ -2,7 +2,7 @@ use std::{collections::HashMap, fmt::Display};
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use containers::{SignedBlock, SignedVote};
+use containers::{SignedBlock, SignedAttestation};
 use serde::Serialize;
 use tokio::sync::mpsc;
 
@@ -62,8 +62,8 @@ pub enum ChainMessage {
         is_trusted: bool,
         should_gossip: bool,
     },
-    ProcessVote {
-        signed_vote: SignedVote,
+    ProcessAttestation {
+        signed_attestation: SignedAttestation,
         is_trusted: bool,
         should_gossip: bool,
     },
@@ -78,9 +78,9 @@ impl ChainMessage {
         }
     }
 
-    pub fn vote(signed_vote: SignedVote) -> Self {
-        ChainMessage::ProcessVote {
-            signed_vote,
+    pub fn attestation(signed_attestation: SignedAttestation) -> Self {
+        ChainMessage::ProcessAttestation {
+            signed_attestation,
             is_trusted: false,
             should_gossip: true,
         }
@@ -93,8 +93,8 @@ impl Display for ChainMessage {
             ChainMessage::ProcessBlock { signed_block, .. } => {
                 write!(f, "ProcessBlock(slot={})", signed_block.message.slot.0)
             }
-            ChainMessage::ProcessVote { signed_vote, .. } => {
-                write!(f, "ProcessVote(slot={})", signed_vote.message.slot.0)
+            ChainMessage::ProcessAttestation { signed_attestation, .. } => {
+                write!(f, "ProcessAttestation(slot={})", signed_attestation.message.data.slot.0)
             }
         }
     }
@@ -103,7 +103,7 @@ impl Display for ChainMessage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OutboundP2pRequest {
     GossipBlock(SignedBlock),
-    GossipVote(SignedVote),
+    GossipAttestation(SignedAttestation),
 }
 
 #[async_trait]

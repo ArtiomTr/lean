@@ -241,12 +241,12 @@ where
                             warn!("failed to send block for slot {slot} to chain: {err:?}");
                         }
                     }
-                    Ok(GossipsubMessage::Vote(signed_vote)) => {
-                        let slot = signed_vote.message.slot.0;
+                    Ok(GossipsubMessage::Attestation(signed_attestation)) => {
+                        let slot = signed_attestation.message.data.slot.0;
 
                         if let Err(err) = self.chain_message_sink
-                            .send(ChainMessage::ProcessVote {
-                                signed_vote,
+                            .send(ChainMessage::ProcessAttestation {
+                                signed_attestation: signed_attestation,
                                 is_trusted: false,
                                 should_gossip: true,
                             })
@@ -342,18 +342,18 @@ where
                     }
                 }
             }
-            OutboundP2pRequest::GossipVote(signed_vote) => {
-                let slot = signed_vote.message.slot.0;
-                match signed_vote.to_ssz() {
+            OutboundP2pRequest::GossipAttestation(signed_attestation) => {
+                let slot = signed_attestation.message.data.slot.0;
+                match signed_attestation.to_ssz() {
                     Ok(bytes) => {
-                        if let Err(err) = self.publish_to_topic(GossipsubKind::Vote, bytes) {
-                            warn!(slot = slot, ?err, "Publish vote failed");
+                        if let Err(err) = self.publish_to_topic(GossipsubKind::Attestation, bytes) {
+                            warn!(slot = slot, ?err, "Publish attestation failed");
                         } else {
-                            info!(slot = slot, "Broadcasted vote");
+                            info!(slot = slot, "Broadcasted attestation");
                         }
                     }
                     Err(err) => {
-                        warn!(slot = slot, ?err, "Serialize vote failed");
+                        warn!(slot = slot, ?err, "Serialize attestation failed");
                     }
                 }
             }
