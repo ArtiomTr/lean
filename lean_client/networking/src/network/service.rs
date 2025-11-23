@@ -231,7 +231,7 @@ where
                         let slot = signed_block_with_attestation.message.block.slot.0;
 
                         if let Err(err) = self.chain_message_sink
-                            .send(ChainMessage::ProcessBlockWithAttestation {
+                            .send(ChainMessage::ProcessBlock {
                                 signed_block_with_attestation,
                                 is_trusted: false,
                                 should_gossip: true,
@@ -269,6 +269,7 @@ where
         &mut self,
         _event: ReqRespMessage,
     ) -> Option<NetworkEvent> {
+        info!(?_event, "RequestResponse event");
         None
     }
 

@@ -57,7 +57,7 @@ impl PeerCount {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChainMessage {
-    ProcessBlockWithAttestation {
+    ProcessBlock {
         signed_block_with_attestation: SignedBlockWithAttestation,
         is_trusted: bool,
         should_gossip: bool,
@@ -71,7 +71,7 @@ pub enum ChainMessage {
 
 impl ChainMessage {
     pub fn block_with_attestation(signed_block_with_attestation: SignedBlockWithAttestation) -> Self {
-        ChainMessage::ProcessBlockWithAttestation {
+        ChainMessage::ProcessBlock {
             signed_block_with_attestation,
             is_trusted: false,
             should_gossip: true,
@@ -90,7 +90,7 @@ impl ChainMessage {
 impl Display for ChainMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ChainMessage::ProcessBlockWithAttestation { signed_block_with_attestation, .. } => {
+            ChainMessage::ProcessBlock { signed_block_with_attestation, .. } => {
                 write!(f, "ProcessBlockWithAttestation(slot={})", signed_block_with_attestation.message.block.slot.0)
             }
             ChainMessage::ProcessAttestation { signed_attestation, .. } => {
