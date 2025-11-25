@@ -1,5 +1,5 @@
 use crate::store::*;
-use containers::{attestation::Attestation, block::SignedBlock, ValidatorIndex};
+use containers::{attestation::Attestation, block::SignedBlockWithAttestation, ValidatorIndex};
 
 #[inline]
 pub fn on_tick(store: &mut Store, time: u64, _has_proposal: bool) {
@@ -11,13 +11,16 @@ pub fn on_tick(store: &mut Store, time: u64, _has_proposal: bool) {
 }
 
 #[inline]
-pub fn on_attestation(store: &mut Store, attestation: Attestation, is_from_block: bool) {
+pub fn on_attestation(store: &mut Store, attestation: Attestation, is_from_block: bool) -> Result<(), String> {
     let key_vald = ValidatorIndex(attestation.validator_id.0);
     let vote = attestation.data.target;
 
     let curr_slot = store.time / INTERVALS_PER_SLOT;
     if vote.slot.0 > curr_slot {
-        return;
+        return Err(format!(
+            "Attestation slot {} is in the future (current slot {})",
+            vote.slot.0, curr_slot
+        ));
     }
 
     if is_from_block {
@@ -37,50 +40,58 @@ pub fn on_attestation(store: &mut Store, attestation: Attestation, is_from_block
             store.latest_new_votes.insert(key_vald, vote);
         }
     }
+    Ok(())
 }
 
 //update
-pub fn on_block(store: &mut Store, signed_block: SignedBlock) {
+pub fn on_block(store: &mut Store, signed_block: SignedBlockWithAttestation) -> Result<(), String> {
     let block_root = get_block_root(&signed_block);
     if store.blocks.contains_key(&block_root) {
-        return;
+        return Ok(());
     }
-    let root = signed_block.message.parent_root;
+    let block = &signed_block.message.block;
+    let root = block.parent_root;
 
-    let block_time = signed_block.message.slot.0 * INTERVALS_PER_SLOT;
+    let block_time = block.slot.0 * INTERVALS_PER_SLOT;
     if store.time < block_time {
         store.time = block_time;
     }
 
     accept_new_votes(store);
 
-    let attest = &signed_block.message.body.attestations;
+    let attest = &block.body.attestations;
     for i in 0.. {
         match attest.get(i) {
             Ok(attest) => {
-                on_attestation(store, attest.clone(), true);
+                on_attestation(store, attest.clone(), true)?;
             }
             Err(_) => break,
         }
     }
 
+    on_attestation(
+        store,
+        signed_block.message.proposer_attestation.clone(),
+        true,
+    )?;
+
     // naujas
     let state = match store.states.get(&root) {
         Some(state) => state,
         None => {
-            panic!("Err: (Fork-choice::Handlers::OnBlock)no parent state.");
+            return Err("Err: (Fork-choice::Handlers::OnBlock)no parent state.".to_string());
         }
     };
 
-    let mut new_state = state.state_transition_with_validation(signed_block.clone(), true, false);
+    let mut new_state = state.state_transition_with_validation(signed_block.clone(), true, false)?;
 
     use containers::block::hash_tree_root as hash_root;
-    let body_root = hash_root(&signed_block.message.body);
+    let body_root = hash_root(&block.body);
     new_state.latest_block_header = containers::block::BlockHeader {
-        slot: signed_block.message.slot,
-        proposer_index: signed_block.message.proposer_index,
-        parent_root: signed_block.message.parent_root,
-        state_root: signed_block.message.state_root,
+        slot: block.slot,
+        proposer_index: block.proposer_index,
+        parent_root: block.parent_root,
+        state_root: block.state_root,
         body_root,
     };
 
@@ -90,9 +101,9 @@ pub fn on_block(store: &mut Store, signed_block: SignedBlock) {
     use containers::checkpoint::Checkpoint;
     let proposer_vote = Checkpoint {
         root: block_root,
-        slot: signed_block.message.slot,
+        slot: block.slot,
     };
-    let proposer_idx = signed_block.message.proposer_index;
+    let proposer_idx = block.proposer_index;
 
     if store
         .latest_new_votes
@@ -103,4 +114,5 @@ pub fn on_block(store: &mut Store, signed_block: SignedBlock) {
     }
 
     update_head(store);
+    Ok(())
 }

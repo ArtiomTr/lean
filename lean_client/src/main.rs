@@ -1,25 +1,26 @@
-use std::net::IpAddr;
-use std::sync::Arc;
 use clap::Parser;
-use tokio::{sync::mpsc, task};
-use networking::network::{NetworkService, NetworkServiceConfig};
-use networking::gossipsub::config::GossipsubConfig;
-use networking::gossipsub::topic::get_topics;
-use networking::types::{ChainMessage, OutboundP2pRequest};
 use containers::{
-    block::{Block, BlockBody, SignedBlock},
+    attestation::{Attestation, AttestationData, BlockSignatures},
+    block::{Block, BlockBody, BlockWithAttestation, SignedBlockWithAttestation},
+    checkpoint::Checkpoint,
     config::Config,
+    ssz,
     state::State,
     types::{Bytes32, Uint64, ValidatorIndex},
     Slot,
-    Signature,
-    ssz,
 };
 use fork_choice::{
     handlers::{on_attestation, on_block},
-    store::{get_forkchoice_store},
+    store::get_forkchoice_store,
 };
-use tracing::{info};
+use networking::gossipsub::config::GossipsubConfig;
+use networking::gossipsub::topic::get_topics;
+use networking::network::{NetworkService, NetworkServiceConfig};
+use networking::types::{ChainMessage, OutboundP2pRequest};
+use std::net::IpAddr;
+use std::sync::Arc;
+use tokio::{sync::mpsc, task};
+use tracing::{info, warn};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -44,25 +45,31 @@ async fn main() {
 
     let args = Args::parse();
 
-    let (_outbound_p2p_sender, outbound_p2p_receiver) = mpsc::unbounded_channel::<OutboundP2pRequest>();
-    let (chain_message_sender, mut chain_message_receiver) = mpsc::unbounded_channel::<ChainMessage>();
+    let (_outbound_p2p_sender, outbound_p2p_receiver) =
+        mpsc::unbounded_channel::<OutboundP2pRequest>();
+    let (chain_message_sender, mut chain_message_receiver) =
+        mpsc::unbounded_channel::<ChainMessage>();
 
-    // Initialize Fork Choice Store
-    
     let (genesis_time, validators) = if let Some(genesis_path) = args.genesis {
         let genesis_config = containers::GenesisConfig::load_from_file(genesis_path)
             .expect("Failed to load genesis config");
-        
-        let validators: Vec<containers::validator::Validator> = genesis_config.genesis_validators.iter().map(|v_str| {
-            let pubkey = containers::validator::BlsPublicKey::from_hex(v_str)
-                .expect("Invalid genesis validator pubkey");
-            containers::validator::Validator { pubkey }
-        }).collect();
-        
+
+        let validators: Vec<containers::validator::Validator> = genesis_config
+            .genesis_validators
+            .iter()
+            .map(|v_str| {
+                let pubkey = containers::validator::BlsPublicKey::from_hex(v_str)
+                    .expect("Invalid genesis validator pubkey");
+                containers::validator::Validator { pubkey }
+            })
+            .collect();
+
         (genesis_config.genesis_time, validators)
     } else {
         let num_validators = 3;
-        let validators = (0..num_validators).map(|_| containers::validator::Validator::default()).collect();
+        let validators = (0..num_validators)
+            .map(|_| containers::validator::Validator::default())
+            .collect();
         (1763757427, validators)
     };
 
@@ -73,11 +80,39 @@ async fn main() {
         proposer_index: ValidatorIndex(0),
         parent_root: Bytes32(ssz::H256::zero()),
         state_root: Bytes32(ssz::H256::zero()),
-        body: BlockBody { attestations: Default::default() },
+        body: BlockBody {
+            attestations: Default::default(),
+        },
+    };
+
+    let genesis_proposer_attestation = Attestation {
+        validator_id: Uint64(0),
+        data: AttestationData {
+            slot: Slot(0),
+            head: Checkpoint {
+                root: Bytes32(ssz::H256::zero()),
+                slot: Slot(0),
+            },
+            target: Checkpoint {
+                root: Bytes32(ssz::H256::zero()),
+                slot: Slot(0),
+            },
+            source: Checkpoint {
+                root: Bytes32(ssz::H256::zero()),
+                slot: Slot(0),
+            },
+        },
+    };
+    let genesis_signed_block = SignedBlockWithAttestation {
+        message: BlockWithAttestation {
+            block: genesis_block,
+            proposer_attestation: genesis_proposer_attestation,
+        },
+        signature: BlockSignatures::default(),
     };
 
     let config = Config { genesis_time };
-    //let mut store = get_forkchoice_store(genesis_state, genesis_block, config);
+    let mut store = get_forkchoice_store(genesis_state, genesis_signed_block, config);
 
     let fork = "devnet0".to_string();
     let gossipsub_topics = get_topics(fork);
@@ -95,8 +130,8 @@ async fn main() {
         outbound_p2p_receiver,
         chain_message_sender,
     )
-        .await
-        .expect("Failed to create network service");
+    .await
+    .expect("Failed to create network service");
 
     let network_handle = task::spawn(async move {
         if let Err(err) = network_service.start().await {
@@ -106,15 +141,28 @@ async fn main() {
 
     let chain_handle = task::spawn(async move {
         while let Some(message) = chain_message_receiver.recv().await {
-            println!("Received chain message: {}", message);
+            info!("Received chain message: {}", message);
             match message {
-                ChainMessage::ProcessBlock { signed_block_with_attestation, .. } => {
-                    info!("process block");
-                    //on_block(&mut store, signed_block_with_attestation);
+                ChainMessage::ProcessBlock {
+                    signed_block_with_attestation,
+                    ..
+                } => {
+                    if let Err(e) = on_block(&mut store, signed_block_with_attestation) {
+                        warn!("Error processing block: {}", e);
+                    }
+                    else {
+                        info!("Block processed successfully.");
+                    }
                 }
-                ChainMessage::ProcessAttestation { signed_attestation, .. } => {
-                    info!("process attestation");
-                    //on_attestation(&mut store, signed_attestation.message, false);
+                ChainMessage::ProcessAttestation {
+                    signed_attestation, ..
+                } => {
+                    if let Err(e) = on_attestation(&mut store, signed_attestation.message, false) {
+                        warn!("Error processing attestation: {}", e);
+                    }
+                    else {
+                        info!("Attestation processed successfully.");
+                    }
                 }
             }
         }
