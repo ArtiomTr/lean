@@ -25,7 +25,7 @@ pub fn on_attestation(
     let curr_slot = store.time / INTERVALS_PER_SLOT;
     if vote.slot.0 > curr_slot {
         return Err(format!(
-            "Attestation slot {} is in the future (current slot {})",
+            "Err: (Fork-choice::Handlers::OnAttestation) Attestation for slot {} has not yet occured, out of sync. (CURRENT SLOT NUMBER: {})",
             vote.slot.0, curr_slot
         ));
     }

@@ -60,7 +60,7 @@ pub fn get_fork_choice_head(
             .iter()
             .min_by_key(|(_, block)| block.message.block.slot)
             .map(|(r, _)| *r)
-            .expect("Err:(ForkChoice::get_fork_choice_head) blocks can't be empty");
+            .expect("Error: Empty block.");
     }
     let mut vote_weights: HashMap<Root, usize> = HashMap::new();
     let root_slot = store.blocks[&root].message.block.slot;
@@ -70,7 +70,7 @@ pub fn get_fork_choice_head(
         if let Some(block) = store.blocks.get(&v.root) {
             let mut curr = v.root;
 
-            let mut curr_slot = block.message.block.slot; // mut nes borrowinam
+            let mut curr_slot = block.message.block.slot;
 
             while curr_slot > root_slot {
                 *vote_weights.entry(curr).or_insert(0) += 1;
@@ -136,7 +136,6 @@ pub fn get_latest_justified(states: &HashMap<Root, State>) -> Option<&Checkpoint
 }
 
 pub fn update_head(store: &mut Store) {
-    // note to self: Option?
     if let Some(latest_justified) = get_latest_justified(&store.states) {
         store.latest_justified = latest_justified.clone();
     }
