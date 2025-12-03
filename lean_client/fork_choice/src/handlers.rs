@@ -1,5 +1,7 @@
 use crate::store::*;
-use containers::{Bytes32, ValidatorIndex, attestation::Attestation, block::SignedBlockWithAttestation};
+use containers::{
+    attestation::Attestation, block::SignedBlockWithAttestation, Bytes32, ValidatorIndex,
+};
 use ssz::SszHash;
 
 #[inline]
@@ -12,14 +14,18 @@ pub fn on_tick(store: &mut Store, time: u64, _has_proposal: bool) {
 }
 
 #[inline]
-pub fn on_attestation(store: &mut Store, attestation: Attestation, is_from_block: bool) -> Result<(), String> {
+pub fn on_attestation(
+    store: &mut Store,
+    attestation: Attestation,
+    is_from_block: bool,
+) -> Result<(), String> {
     let key_vald = ValidatorIndex(attestation.validator_id.0);
     let vote = attestation.data.target;
 
     let curr_slot = store.time / INTERVALS_PER_SLOT;
     if vote.slot.0 > curr_slot {
         return Err(format!(
-            "Attestation slot {} is in the future (current slot {})",
+            "Err: (Fork-choice::Handlers::OnAttestation) Attestation for slot {} has not yet occured, out of sync. (CURRENT SLOT NUMBER: {})",
             vote.slot.0, curr_slot
         ));
     }
@@ -44,13 +50,39 @@ pub fn on_attestation(store: &mut Store, attestation: Attestation, is_from_block
     Ok(())
 }
 
-//update
 pub fn on_block(store: &mut Store, signed_block: SignedBlockWithAttestation) -> Result<(), String> {
     let block_root = Bytes32(signed_block.message.block.hash_tree_root());
 
     if store.blocks.contains_key(&block_root) {
         return Ok(());
     }
+
+    let parent_root = signed_block.message.block.parent_root;
+
+    if !store.states.contains_key(&parent_root) && !parent_root.0.is_zero() {
+        store
+            .blocks_queue
+            .entry(parent_root)
+            .or_insert_with(Vec::new)
+            .push(signed_block);
+        return Err(format!(
+            "Err: (Fork-choice::Handlers::OnBlock) Block queued: parent {:?} not yet available (pending: {} blocks)",
+            &parent_root.0.as_bytes()[..4],
+            store.blocks_queue.values().map(|v| v.len()).sum::<usize>()
+        ));
+    }
+
+    process_block_internal(store, signed_block, block_root)?;
+    process_pending_blocks(store, vec![block_root]);
+
+    Ok(())
+}
+
+fn process_block_internal(
+    store: &mut Store,
+    signed_block: SignedBlockWithAttestation,
+    block_root: Bytes32,
+) -> Result<(), String> {
     let block = &signed_block.message.block;
 
     let block_time = block.slot.0 * INTERVALS_PER_SLOT;
@@ -76,15 +108,17 @@ pub fn on_block(store: &mut Store, signed_block: SignedBlockWithAttestation) -> 
         true,
     )?;
 
-    // naujas
     let state = match store.states.get(&block.parent_root) {
         Some(state) => state,
         None => {
-            return Err("Err: (Fork-choice::Handlers::OnBlock)no parent state.".to_string());
+            return Err(
+                "Err: (Fork-choice::Handlers::ProcesBlockInternal)No parent state.".to_string(),
+            );
         }
     };
 
-    let mut new_state = state.state_transition_with_validation(signed_block.clone(), true, false)?;
+    let mut new_state =
+        state.state_transition_with_validation(signed_block.clone(), true, false)?;
 
     use containers::block::hash_tree_root as hash_root;
     let body_root = hash_root(&block.body);
@@ -116,4 +150,17 @@ pub fn on_block(store: &mut Store, signed_block: SignedBlockWithAttestation) -> 
 
     update_head(store);
     Ok(())
+}
+
+fn process_pending_blocks(store: &mut Store, mut roots: Vec<Bytes32>) {
+    while let Some(parent_root) = roots.pop() {
+        if let Some(purgatory) = store.blocks_queue.remove(&parent_root) {
+            for block in purgatory {
+                let block_origins = Bytes32(block.message.block.hash_tree_root());
+                if let Ok(()) = process_block_internal(store, block, block_origins) {
+                    roots.push(block_origins);
+                }
+            }
+        }
+    }
 }

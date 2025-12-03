@@ -1,10 +1,10 @@
 use crate::{Checkpoint, Slot, Uint64};
+use serde::{Deserialize, Serialize};
 use ssz::ByteVector;
 use ssz_derive::Ssz;
 use serde::{Deserialize, Serialize};
 use typenum::{Prod, Sum, U100, U31, U12};
 
-// Type-level number for 3100 bytes (signature size) = 31 * 100
 pub type U3100 = Prod<U31, U100>;
 
 // Type-level number for 3112 bytes
