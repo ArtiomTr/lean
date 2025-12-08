@@ -3,6 +3,9 @@ name = "containers"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+xmss-verify = ["leansig"]
+
 [lib]
 name = "containers"
 path = "src/lib.rs"
@@ -15,6 +18,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 hex = "0.4.3"
 sha2 = "0.10"
+leansig = { git = "https://github.com/leanEthereum/leanSig", branch = "main", optional = true }
 
 [dev-dependencies]
 rstest = "0.18"
