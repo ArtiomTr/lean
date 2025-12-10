@@ -1,5 +1,5 @@
 {
-    "tests/consensus/devnet/state_transition/test_block_processing.py::test_block_with_invalid_parent_root[fork_Devnet][fork_devnet-state_transition_test]": {
+    "tests/consensus/devnet/state_transition/test_block_processing.py::test_block_with_invalid_parent_root[fork_Devnet][fork_Devnet-state_transition_test]": {
         "network": "Devnet",
         "pre": {
             "config": {
@@ -30,16 +30,20 @@
             "validators": {
                 "data": [
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0xb40ec9783b56572d99965130ad1cec4f066df43a0fd89d22d420535c62b52711cdaf7f5f696c6b1e4df66a6bab48bb51abcdd77e",
+                        "index": 0
                     },
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0xc5ed4b6fa46e83281e29201b878ad52b4a9b8a2f3c9d8017cfd9b81e8097e1372a097e62be37194c39e2f36f76e8906d2e818238",
+                        "index": 1
                     },
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0x0cc8a378cdeb1a3c4b87156bcba3e87d31fb8c5f1c3ce74b4370001086b8bd5a502ea12d0878536b19cb6769b7285e1c0504fb3e",
+                        "index": 2
                     },
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0xb85c660a781e825a1b783822984e894c4558e304a4b71307f095821d92b6351197c3b1485ffcf872c9a13d5c9381b1636eeed359",
+                        "index": 3
                     }
                 ]
             },
@@ -53,9 +57,9 @@
         "blocks": [
             {
                 "slot": 1,
-                "proposer_index": 1,
-                "parent_root": "0xdeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddead",
-                "state_root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "proposerIndex": 1,
+                "parentRoot": "0xdeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddeaddead",
+                "stateRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
                 "body": {
                     "attestations": {
                         "data": []
@@ -65,10 +69,10 @@
         ],
         "expectException": "AssertionError",
         "_info": {
-            "hash": "0x530aec2cd6fd3f2a92b3e54ad1becc0d68d1fb72621b6767e90df4324fb37ec0",
+            "hash": "0xaa92f50f9e8ca9bc35984f150b886a2f15b8e977f5ef9cc82cbbf0cc0fa94edb",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/state_transition/test_block_processing.py::test_block_with_invalid_parent_root[fork_Devnet]",
-            "description": "Test that blocks with wrong parent root are rejected.\n\nScenario\n--------\nAttempt to process a block where parent root doesn't match\nhash_tree_root(state.latest block header).\n\nExpected Behavior\n-----------------\nBlock processing fails with AssertionError: \"Block parent root mismatch\"\n\nWhy This Matters\n----------------\nMaintains chain integrity:\n- Blocks must reference correct parent\n- Prevents chain history forgery\n- Ensures linear chain continuity\n- Critical for fork resolution\n\nWithout this check, attackers could create invalid chain branches.",
+            "description": "Test that blocks with wrong parent root are rejected.\n\n    Scenario\n    --------\n    Attempt to process a block where parent root doesn't match\n    hash_tree_root(state.latest block header).\n\n    Expected Behavior\n    -----------------\n    Block processing fails with AssertionError: \"Block parent root mismatch\"\n\n    Why This Matters\n    ----------------\n    Maintains chain integrity:\n    - Blocks must reference correct parent\n    - Prevents chain history forgery\n    - Ensures linear chain continuity\n    - Critical for fork resolution\n\n    Without this check, attackers could create invalid chain branches.",
             "fixtureFormat": "state_transition_test"
         }
     }

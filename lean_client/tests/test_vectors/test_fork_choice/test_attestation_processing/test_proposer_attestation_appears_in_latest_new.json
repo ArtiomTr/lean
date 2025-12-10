@@ -1,5 +1,5 @@
 {
-    "tests/consensus/devnet/fc/test_attestation_processing.py::test_proposer_attestation_appears_in_latest_new[fork_Devnet][fork_devnet-fork_choice_test]": {
+    "tests/consensus/devnet/fc/test_attestation_processing.py::test_proposer_attestation_appears_in_latest_new[fork_Devnet][fork_Devnet-fork_choice_test]": {
         "network": "Devnet",
         "anchorState": {
             "config": {
@@ -30,16 +30,20 @@
             "validators": {
                 "data": [
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0xb40ec9783b56572d99965130ad1cec4f066df43a0fd89d22d420535c62b52711cdaf7f5f696c6b1e4df66a6bab48bb51abcdd77e",
+                        "index": 0
                     },
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0xc5ed4b6fa46e83281e29201b878ad52b4a9b8a2f3c9d8017cfd9b81e8097e1372a097e62be37194c39e2f36f76e8906d2e818238",
+                        "index": 1
                     },
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0x0cc8a378cdeb1a3c4b87156bcba3e87d31fb8c5f1c3ce74b4370001086b8bd5a502ea12d0878536b19cb6769b7285e1c0504fb3e",
+                        "index": 2
                     },
                     {
-                        "pubkey": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                        "pubkey": "0xb85c660a781e825a1b783822984e894c4558e304a4b71307f095821d92b6351197c3b1485ffcf872c9a13d5c9381b1636eeed359",
+                        "index": 3
                     }
                 ]
             },
@@ -54,7 +58,7 @@
             "slot": 0,
             "proposerIndex": 0,
             "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
-            "stateRoot": "0x259dd6c91f2bab3b338fd2b4d9a6d8f8e678bc7d75590f96f323c5e82843e913",
+            "stateRoot": "0xceb0487e744334f030a8310f38b89fc8fc6df7adc95d6eca6ead447bd59bf07c",
             "body": {
                 "attestations": {
                     "data": []
@@ -79,23 +83,44 @@
                 },
                 "stepType": "block",
                 "block": {
-                    "slot": 1,
-                    "proposer_index": 1,
-                    "parent_root": "0xc0d44f989da630e63b222085a226fea923e2cc5321ba4c4aa4978b528949827e",
-                    "state_root": "0x57c159521023a7181e36310c0e30f3fa4b49449df06fbb40023ae6db29b9d200",
-                    "body": {
-                        "attestations": {
-                            "data": []
+                    "block": {
+                        "slot": 1,
+                        "proposerIndex": 1,
+                        "parentRoot": "0xb0379c64780b02bee1b0005f65ae1f79c55c67f7a8aa1cb1f243c7dd46714be1",
+                        "stateRoot": "0x1e2a71ba98d42232a279202b449702bac405858921073a2bab416c2024236a1e",
+                        "body": {
+                            "attestations": {
+                                "data": []
+                            }
+                        }
+                    },
+                    "proposerAttestation": {
+                        "validatorId": 1,
+                        "data": {
+                            "slot": 1,
+                            "head": {
+                                "root": "0xf0e2cc55723ca299895cc78dad0648a35d2e3f708a1f8167a4ba558166737ae9",
+                                "slot": 1
+                            },
+                            "target": {
+                                "root": "0xf0e2cc55723ca299895cc78dad0648a35d2e3f708a1f8167a4ba558166737ae9",
+                                "slot": 1
+                            },
+                            "source": {
+                                "root": "0xb0379c64780b02bee1b0005f65ae1f79c55c67f7a8aa1cb1f243c7dd46714be1",
+                                "slot": 0
+                            }
                         }
                     }
                 }
             }
         ],
+        "maxSlot": 1,
         "_info": {
-            "hash": "0xe4b08194164e87ae097308374cf9ece3ceea0eaead521e59e96aae7875b5ccb9",
+            "hash": "0x26adec7122d892aae7bcc8333cf0fb60d92e2960bd2187bc2aa4f6374ed6ad41",
             "comment": "`leanSpec` generated test",
             "testId": "tests/consensus/devnet/fc/test_attestation_processing.py::test_proposer_attestation_appears_in_latest_new[fork_Devnet]",
-            "description": "Proposer attestation appears in latest_new after block processing.\n\nScenario\n--------\nProcess one block at slot 1 (proposer: validator 1).\n\nExpected:\n    - validator 1's attestation has correct slot and checkpoint slots\n\nWhy This Matters\n----------------\nNew proposer attestations enter the pipeline through `latest_new_attestations`,\nnot directly into `latest_known_attestations`.\n\nThis baseline test verifies the entry point of the attestation pipeline.\nAll new attestations must enter through the \"new\" stage before graduating to \"known\".",
+            "description": "Proposer attestation appears in latest_new after block processing.\n\n    Scenario\n    --------\n    Process one block at slot 1 (proposer: validator 1).\n\n    Expected:\n        - validator 1's attestation has correct slot and checkpoint slots\n\n    Why This Matters\n    ----------------\n    New proposer attestations enter the pipeline through `latest_new_attestations`,\n    not directly into `latest_known_attestations`.\n\n    This baseline test verifies the entry point of the attestation pipeline.\n    All new attestations must enter through the \"new\" stage before graduating to \"known\".",
             "fixtureFormat": "fork_choice_test"
         }
     }

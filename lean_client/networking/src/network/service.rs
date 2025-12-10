@@ -3,6 +3,7 @@ use std::{
     net::IpAddr,
     num::{NonZeroU8, NonZeroUsize},
     sync::Arc,
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use anyhow::{Result, anyhow};
@@ -27,7 +28,7 @@ use crate::{
     compressor::Compressor,
     gossipsub::{self, config::GossipsubConfig, message::GossipsubMessage, topic::GossipsubKind},
     network::behaviour::{LeanNetworkBehaviour, LeanNetworkBehaviourEvent},
-    req_resp::{self, ReqRespMessage},
+    req_resp::{self, LeanRequest, ReqRespMessage, STATUS_PROTOCOL_V1, BLOCKS_BY_ROOT_PROTOCOL_V1},
     types::{
         ChainMessage, ChainMessageSink, ConnectionState, OutboundP2pRequest, P2pRequestSource,
     },
@@ -83,6 +84,7 @@ where
     network_config: Arc<NetworkServiceConfig>,
     swarm: Swarm<LeanNetworkBehaviour>,
     peer_table: Arc<Mutex<HashMap<PeerId, ConnectionState>>>,
+    peer_count: Arc<AtomicU64>,
     outbound_p2p_requests: R,
     chain_message_sink: S,
 }
@@ -96,6 +98,20 @@ where
         network_config: Arc<NetworkServiceConfig>,
         outbound_p2p_requests: R,
         chain_message_sink: S,
+    ) -> Result<Self> {
+        Self::new_with_peer_count(
+            network_config,
+            outbound_p2p_requests,
+            chain_message_sink,
+            Arc::new(AtomicU64::new(0)),
+        ).await
+    }
+
+    pub async fn new_with_peer_count(
+        network_config: Arc<NetworkServiceConfig>,
+        outbound_p2p_requests: R,
+        chain_message_sink: S,
+        peer_count: Arc<AtomicU64>,
     ) -> Result<Self> {
         let local_key = Keypair::generate_secp256k1();
         let behaviour = Self::build_behaviour(&local_key, &network_config)?;
@@ -117,6 +133,7 @@ where
             network_config,
             swarm,
             peer_table: Arc::new(Mutex::new(HashMap::new())),
+            peer_count,
             outbound_p2p_requests,
             chain_message_sink,
         };
@@ -169,19 +186,37 @@ where
                 // ConnectionLimits behaviour has no events
                 None
             }
-            SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+            SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                 self.peer_table
                     .lock()
                     .insert(peer_id, ConnectionState::Connected);
+                
+                let connected = self.peer_table.lock()
+                    .values()
+                    .filter(|s| **s == ConnectionState::Connected)
+                    .count() as u64;
+                self.peer_count.store(connected, Ordering::Relaxed);
 
-                info!(peer = %peer_id, "Connected to peer");
+                info!(peer = %peer_id, "Connected to peer (total: {})", connected);
+                
+                if endpoint.is_dialer() {
+                    self.send_status_request(peer_id);
+                }
+                
                 None
             }
             SwarmEvent::ConnectionClosed { peer_id, .. } => {
-                info!(peer = %peer_id, "Disconnected from peer");
                 self.peer_table
                     .lock()
                     .insert(peer_id, ConnectionState::Disconnected);
+                
+                let connected = self.peer_table.lock()
+                    .values()
+                    .filter(|s| **s == ConnectionState::Connected)
+                    .count() as u64;
+                self.peer_count.store(connected, Ordering::Relaxed);
+
+                info!(peer = %peer_id, "Disconnected from peer (total: {})", connected);
                 Some(NetworkEvent::PeerDisconnected(peer_id))
             }
             SwarmEvent::IncomingConnection { local_addr, .. } => {
@@ -260,7 +295,9 @@ where
                             warn!("failed to send vote for slot {slot} to chain: {err:?}");
                         }
                     }
-                    Err(err) => warn!(%err, topic = %message.topic, "gossip decode failed"),
+                    Err(err) => {
+                        warn!(%err, topic = %message.topic, "gossip decode failed");
+                    }
                 }
             }
             _ => {
@@ -401,6 +438,34 @@ where
     pub fn swarm_mut(&mut self) -> &mut Swarm<LeanNetworkBehaviour> {
         &mut self.swarm
     }
+    
+    fn send_status_request(&mut self, peer_id: PeerId) {
+        let status = containers::Status::default();
+        let request = LeanRequest::Status(status);
+        
+        info!(peer = %peer_id, "Sending Status request for handshake");
+        let _request_id = self.swarm.behaviour_mut().req_resp.send_request(&peer_id, request);
+    }
+    
+    pub fn send_blocks_by_root_request(&mut self, peer_id: PeerId, roots: Vec<containers::Bytes32>) {
+        if roots.is_empty() {
+            return;
+        }
+        
+        if roots.len() > req_resp::MAX_REQUEST_BLOCKS {
+            warn!(
+                peer = %peer_id,
+                requested = roots.len(),
+                max = req_resp::MAX_REQUEST_BLOCKS,
+                "BlocksByRoot request exceeds MAX_REQUEST_BLOCKS"
+            );
+            return;
+        }
+        
+        let request = LeanRequest::BlocksByRoot(roots.clone());
+        info!(peer = %peer_id, num_roots = roots.len(), "Sending BlocksByRoot request");
+        let _request_id = self.swarm.behaviour_mut().req_resp.send_request(&peer_id, request);
+    }
 
     fn build_behaviour(local_key: &Keypair, cfg: &NetworkServiceConfig) -> Result<LeanNetworkBehaviour> {
         let identify = Self::build_identify(local_key);
@@ -411,7 +476,10 @@ where
         )
             .map_err(|err| anyhow!("Failed to create gossipsub behaviour: {err:?}"))?;
 
-        let req_resp = req_resp::build(vec!["/lean/req/1".to_string()]);
+        let req_resp = req_resp::build(vec![
+            STATUS_PROTOCOL_V1.to_string(),
+            BLOCKS_BY_ROOT_PROTOCOL_V1.to_string(),
+        ]);
 
         let connection_limits = connection_limits::Behaviour::new(
             ConnectionLimits::default()

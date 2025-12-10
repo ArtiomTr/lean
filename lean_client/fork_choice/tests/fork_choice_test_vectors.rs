@@ -85,6 +85,9 @@ struct TestDataWrapper<T> {
 struct TestValidator {
     #[allow(dead_code)]
     pubkey: String,
+    #[allow(dead_code)]
+    #[serde(default)]
+    index: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -101,13 +104,19 @@ struct TestAnchorBlock {
 #[serde(rename_all = "camelCase")]
 struct TestBlock {
     slot: u64,
-    #[serde(rename = "proposer_index")]
     proposer_index: u64,
-    #[serde(rename = "parent_root")]
     parent_root: String,
-    #[serde(rename = "state_root")]
     state_root: String,
     body: TestBlockBody,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TestBlockWithAttestation {
+    block: TestBlock,
+    proposer_attestation: TestAttestation,
+    #[serde(default)]
+    block_root_label: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -118,10 +127,12 @@ struct TestBlockBody {
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum TestAttestation {
+    #[serde(rename_all = "camelCase")]
     Nested {
         validator_id: u64,
         data: TestAttestationData,
     },
+    #[serde(rename_all = "camelCase")]
     Flat {
         validator_id: u64,
         slot: u64,
@@ -144,12 +155,14 @@ struct TestAttestationData {
 #[serde(rename_all = "camelCase")]
 struct TestStep {
     valid: bool,
-    checks: TestChecks,
+    #[serde(default)]
+    checks: Option<TestChecks>,
     #[serde(rename = "stepType")]
     step_type: String,
-    block: Option<TestBlock>,
+    block: Option<TestBlockWithAttestation>,
     attestation: Option<TestAttestation>,
     tick: Option<u64>,
+    time: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -289,7 +302,8 @@ fn convert_test_anchor_block(test_block: &TestAnchorBlock) -> SignedBlockWithAtt
     }
 }
 
-fn convert_test_block(test_block: &TestBlock) -> SignedBlockWithAttestation {
+fn convert_test_block(test_block_with_att: &TestBlockWithAttestation) -> SignedBlockWithAttestation {
+    let test_block = &test_block_with_att.block;
     let mut attestations = ssz::PersistentList::default();
 
     for (i, test_att) in test_block.body.attestations.data.iter().enumerate() {
@@ -307,25 +321,7 @@ fn convert_test_block(test_block: &TestBlock) -> SignedBlockWithAttestation {
         body: BlockBody { attestations },
     };
 
-    // Create proposer attestation
-    let proposer_attestation = Attestation {
-        validator_id: Uint64(test_block.proposer_index),
-        data: AttestationData {
-            slot: Slot(test_block.slot),
-            head: Checkpoint {
-                root: parse_root(&test_block.parent_root),
-                slot: Slot(test_block.slot),
-            },
-            target: Checkpoint {
-                root: parse_root(&test_block.parent_root),
-                slot: Slot(test_block.slot),
-            },
-            source: Checkpoint {
-                root: parse_root(&test_block.parent_root),
-                slot: Slot(0),
-            },
-        },
-    };
+    let proposer_attestation = convert_test_attestation(&test_block_with_att.proposer_attestation);
 
     SignedBlockWithAttestation {
         message: BlockWithAttestation {
@@ -384,9 +380,10 @@ fn initialize_state_from_test(test_state: &TestAnchorState) -> State {
     }
 
     let mut validators = List::default();
-    for _ in 0..test_state.validators.data.len() {
+    for i in 0..test_state.validators.data.len() {
         let validator = containers::validator::Validator {
             pubkey: containers::validator::BlsPublicKey::default(),
+            index: containers::Uint64(i as u64),
         };
         validators.push(validator).expect("Failed to add validator");
     }
@@ -407,10 +404,16 @@ fn initialize_state_from_test(test_state: &TestAnchorState) -> State {
 
 fn verify_checks(
     store: &Store,
-    checks: &TestChecks,
+    checks: &Option<TestChecks>,
     block_labels: &HashMap<String, Bytes32>,
     step_idx: usize,
 ) -> Result<(), String> {
+    // If no checks provided, nothing to verify
+    let checks = match checks {
+        Some(c) => c,
+        None => return Ok(()),
+    };
+    
     if let Some(expected_slot) = checks.head_slot {
         let actual_slot = store.blocks[&store.head].message.block.slot.0;
         if actual_slot != expected_slot {
@@ -529,10 +532,8 @@ fn run_single_test(_test_name: &str, test: TestVector) -> Result<(), String> {
                 };
 
                 if result.is_ok() {
-                    if let Some(label) = &step.checks.head_root_label {
-                        if !block_labels.contains_key(label) {
-                            block_labels.insert(label.clone(), store.head);
-                        }
+                    if let Some(label) = &test_block.block_root_label {
+                        block_labels.insert(label.clone(), store.head);
                     }
                 }
 
@@ -553,11 +554,12 @@ fn run_single_test(_test_name: &str, test: TestVector) -> Result<(), String> {
                     verify_checks(&store, &step.checks, &block_labels, step_idx)?;
                 }
             }
-            "tick" => {
-                let time = step
+            "tick" | "time" => {
+                let time_value = step
                     .tick
-                    .ok_or_else(|| format!("Step {}: Missing tick data", step_idx))?;
-                on_tick(&mut store, time, false);
+                    .or(step.time)
+                    .ok_or_else(|| format!("Step {}: Missing tick/time data", step_idx))?;
+                on_tick(&mut store, time_value, false);
 
                 if step.valid {
                     verify_checks(&store, &step.checks, &block_labels, step_idx)?;

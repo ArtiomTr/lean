@@ -26,6 +26,7 @@ pub struct BlockHeader {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Ssz, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Block {
     pub slot: Slot,
     pub proposer_index: ValidatorIndex,
