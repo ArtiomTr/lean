@@ -20,6 +20,11 @@ cargo test -p containers --test main test_vectors::genesis
 cargo test -p containers --test main unit_tests::state_process
 ```
 
+### Tests in files with methods
+```bash
+cargo test -p containers --lib
+```
+
 ### With output
 ```bash
 cargo test -p containers --test main test_vectors -- --nocapture
