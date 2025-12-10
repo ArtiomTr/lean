@@ -31,17 +31,37 @@ pub fn get_forkchoice_store(
     anchor_block: SignedBlockWithAttestation,
     config: Config,
 ) -> Store {
-    let block = Bytes32(anchor_block.message.block.hash_tree_root());
+    let block_root = Bytes32(anchor_block.message.block.hash_tree_root());
+    let block_slot = anchor_block.message.block.slot;
+
+    // For genesis, set justified/finalized to the anchor block if they're zero
+    let latest_justified = if anchor_state.latest_justified.root.0.is_zero() {
+        Checkpoint {
+            root: block_root,
+            slot: block_slot,
+        }
+    } else {
+        anchor_state.latest_justified.clone()
+    };
+
+    let latest_finalized = if anchor_state.latest_finalized.root.0.is_zero() {
+        Checkpoint {
+            root: block_root,
+            slot: block_slot,
+        }
+    } else {
+        anchor_state.latest_finalized.clone()
+    };
 
     Store {
-        time: anchor_block.message.block.slot.0 * INTERVALS_PER_SLOT,
+        time: block_slot.0 * INTERVALS_PER_SLOT,
         config,
-        head: block,
-        safe_target: block,
-        latest_justified: anchor_state.latest_justified.clone(),
-        latest_finalized: anchor_state.latest_finalized.clone(),
-        blocks: [(block, anchor_block)].into(),
-        states: [(block, anchor_state)].into(),
+        head: block_root,
+        safe_target: block_root,
+        latest_justified,
+        latest_finalized,
+        blocks: [(block_root, anchor_block)].into(),
+        states: [(block_root, anchor_state)].into(),
         latest_known_votes: HashMap::new(),
         latest_new_votes: HashMap::new(),
         blocks_queue: HashMap::new(),
@@ -137,98 +157,18 @@ pub fn get_latest_justified(states: &HashMap<Root, State>) -> Option<&Checkpoint
 
 pub fn update_head(store: &mut Store) {
     if let Some(latest_justified) = get_latest_justified(&store.states) {
-        store.latest_justified = latest_justified.clone();
-    }
-
-    let mut combined_votes = store.latest_known_votes.clone();
-    combined_votes.extend(store.latest_new_votes.clone());
-
-    let current_head = store.head;
-    let new_head = get_fork_choice_head(store, store.latest_justified.root, &combined_votes, 0);
-
-    if new_head != current_head {
-        let is_extension = is_descendant(store, current_head, new_head);
-
-        if is_extension {
-            store.head = new_head;
-        } else {
-            let should_switch = reorg_new_head(store, current_head, new_head, &combined_votes);
-            if should_switch {
-                store.head = new_head;
-            }
+        if latest_justified.slot > store.latest_justified.slot {
+            store.latest_justified = latest_justified.clone();
         }
     }
+
+    let new_head = get_fork_choice_head(store, store.latest_justified.root, &store.latest_known_votes, 0);
+    store.head = new_head;
 
     if let Some(state) = store.states.get(&store.head) {
-        store.latest_finalized = state.latest_finalized.clone();
-    }
-}
-
-fn is_descendant(store: &Store, ancestor: Root, descendant: Root) -> bool {
-    let mut curr = descendant;
-    while let Some(block) = store.blocks.get(&curr) {
-        if curr == ancestor {
-            return true;
+        if state.latest_finalized.slot > store.latest_finalized.slot {
+            store.latest_finalized = state.latest_finalized.clone();
         }
-        if block.message.block.parent_root.0.is_zero() {
-            return false;
-        }
-        curr = block.message.block.parent_root;
-    }
-    false
-}
-
-fn reorg_new_head(
-    store: &Store,
-    current_head: Root,
-    new_head: Root,
-    votes: &HashMap<ValidatorIndex, Checkpoint>,
-) -> bool {
-    let mut current_chain = vec![current_head];
-    let mut curr = current_head;
-    while let Some(block) = store.blocks.get(&curr) {
-        if block.message.block.parent_root.0.is_zero() {
-            break;
-        }
-        current_chain.push(block.message.block.parent_root);
-        curr = block.message.block.parent_root;
-    }
-
-    let mut new_chain = vec![new_head];
-    let mut curr = new_head;
-    while let Some(block) = store.blocks.get(&curr) {
-        if block.message.block.parent_root.0.is_zero() {
-            break;
-        }
-        new_chain.push(block.message.block.parent_root);
-        curr = block.message.block.parent_root;
-    }
-
-    let mut current_votes = 0;
-    let mut new_votes = 0;
-
-    for (_validator_idx, vote) in votes.iter() {
-        let on_current_fork = current_chain.contains(&vote.root);
-        let on_new_fork = new_chain.contains(&vote.root);
-
-        if on_current_fork && !on_new_fork {
-            current_votes += 1;
-        } else if on_new_fork && !on_current_fork {
-            new_votes += 1;
-        }
-    }
-
-    let current_len = current_chain.len();
-    let new_len = new_chain.len();
-
-    if current_votes == 0 {
-        true
-    } else if new_len > current_len {
-        true
-    } else if new_votes == votes.len() {
-        true
-    } else {
-        false
     }
 }
 

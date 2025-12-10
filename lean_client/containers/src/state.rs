@@ -101,9 +101,10 @@ impl State {
 
         //TEMP: Create validators list with dummy validators
         let mut validators = List::default();
-        for _ in 0..num_validators.0 {
+        for i in 0..num_validators.0 {
             let validator = Validator {
                 pubkey: crate::validator::BlsPublicKey::default(),
+                index: Uint64(i),
             };
             validators.push(validator).expect("Failed to add validator");
         }

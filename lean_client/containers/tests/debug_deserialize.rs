@@ -4,7 +4,7 @@ use std::fs;
 #[test]
 fn debug_deserialize_state() {
     let json_content = fs::read_to_string(
-        "../tests/test_vectors/test_blocks/test_sequential_blocks.json"
+        "../tests/test_vectors/test_blocks/test_process_first_block_after_genesis.json"
     ).expect("Failed to read test vector file");
     
     // Try to deserialize just to see where it fails

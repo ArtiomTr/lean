@@ -76,8 +76,9 @@ impl BlsPublicKey {
     }
 }
 
-/// Validator record
 #[derive(Clone, Debug, PartialEq, Eq, Default, Ssz, Serialize, Deserialize)]
 pub struct Validator {
     pub pubkey: BlsPublicKey,
+    #[serde(default)]
+    pub index: crate::Uint64,
 }

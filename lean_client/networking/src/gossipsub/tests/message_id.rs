@@ -132,11 +132,14 @@ fn test_message_id_uses_valid_snappy_domain() {
     let message = create_test_message(topic, data.to_vec());
     let computed_id = compute_message_id(&message);
 
-    // Manually compute expected ID to verify algorithm
     let topic_bytes = topic.as_bytes();
+    let topic_len = topic_bytes.len() as u64;
+    
     let mut digest_input = Vec::new();
-    digest_input.extend_from_slice(MESSAGE_DOMAIN_VALID_SNAPPY.as_bytes());
-    digest_input.extend_from_slice(&(topic_bytes.len()).to_le_bytes());
+
+    digest_input.extend_from_slice(MESSAGE_DOMAIN_VALID_SNAPPY);
+
+    digest_input.extend_from_slice(&topic_len.to_le_bytes());
     digest_input.extend_from_slice(topic_bytes);
     digest_input.extend_from_slice(data);
 

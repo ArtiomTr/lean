@@ -5,6 +5,7 @@ pub mod config;
 pub mod serde_helpers;
 pub mod slot;
 pub mod state;
+pub mod status;
 pub mod types;
 pub mod validator;
 
@@ -19,6 +20,7 @@ pub use checkpoint::Checkpoint;
 pub use config::{Config, GenesisConfig};
 pub use slot::Slot;
 pub use state::State;
+pub use status::Status;
 pub use types::{
     Bytes32, HistoricalBlockHashes, JustificationRoots, JustificationsValidators, JustifiedSlots, Validators,
     Uint64, ValidatorIndex,

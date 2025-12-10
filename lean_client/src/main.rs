@@ -12,7 +12,7 @@ use containers::{
 };
 use fork_choice::{
     handlers::{on_attestation, on_block, on_tick},
-    store::get_forkchoice_store,
+    store::{get_forkchoice_store, Store, INTERVALS_PER_SLOT},
 };
 use networking::gossipsub::config::GossipsubConfig;
 use networking::gossipsub::topic::get_topics;
@@ -20,6 +20,7 @@ use networking::network::{NetworkService, NetworkServiceConfig};
 use networking::types::{ChainMessage, OutboundP2pRequest};
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::{
     sync::mpsc,
@@ -27,6 +28,43 @@ use tokio::{
     time::{interval, Duration},
 };
 use tracing::{debug, info, warn};
+
+fn print_chain_status(store: &Store, connected_peers: u64) {
+    let current_slot = store.time / INTERVALS_PER_SLOT;
+    let next_slot = current_slot + 1;
+    
+    let head_slot = store.blocks.get(&store.head)
+        .map(|b| b.message.block.slot.0)
+        .unwrap_or(0);
+    
+    let (head_root, parent_root, state_root) = if let Some(block) = store.blocks.get(&store.head) {
+        let head_root = store.head;
+        let parent_root = block.message.block.parent_root;
+        let state_root = block.message.block.state_root;
+        (head_root, parent_root, state_root)
+    } else {
+        (Bytes32(ssz::H256::zero()), Bytes32(ssz::H256::zero()), Bytes32(ssz::H256::zero()))
+    };
+
+    let (justified, finalized) = if let Some(state) = store.states.get(&store.head) {
+        (&state.latest_justified, &state.latest_finalized)
+    } else {
+        (&store.latest_justified, &store.latest_finalized)
+    };
+
+    println!("\n============================================================");
+    println!("LEAN CHAIN STATUS: Next Slot: {} | Head Slot: {}", next_slot, head_slot);
+    println!("------------------------------------------------------------");
+    println!("Connected Peers:   {}", connected_peers);
+    println!("------------------------------------------------------------");
+    println!("Head Block Root:   0x{:x}", head_root.0);
+    println!("Parent Block Root: 0x{:x}", parent_root.0);
+    println!("State Root:        0x{:x}", state_root.0);
+    println!("------------------------------------------------------------");
+    println!("Latest Justified:  Slot {} | Root: 0x{:x}", justified.slot.0, justified.root.0);
+    println!("Latest Finalized:  Slot {} | Root: 0x{:x}", finalized.slot.0, finalized.root.0);
+    println!("============================================================\n");
+}
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -51,7 +89,7 @@ async fn main() {
 
     let args = Args::parse();
 
-    let (_outbound_p2p_sender, outbound_p2p_receiver) =
+    let (outbound_p2p_sender, outbound_p2p_receiver) =
         mpsc::unbounded_channel::<OutboundP2pRequest>();
     let (chain_message_sender, mut chain_message_receiver) =
         mpsc::unbounded_channel::<ChainMessage>();
@@ -63,10 +101,11 @@ async fn main() {
         let validators: Vec<containers::validator::Validator> = genesis_config
             .genesis_validators
             .iter()
-            .map(|v_str| {
+            .enumerate()
+            .map(|(i, v_str)| {
                 let pubkey = containers::validator::BlsPublicKey::from_hex(v_str)
                     .expect("Invalid genesis validator pubkey");
-                containers::validator::Validator { pubkey }
+                containers::validator::Validator { pubkey, index: Uint64(i as u64) }
             })
             .collect();
 
@@ -74,7 +113,10 @@ async fn main() {
     } else {
         let num_validators = 3;
         let validators = (0..num_validators)
-            .map(|_| containers::validator::Validator::default())
+            .map(|i| containers::validator::Validator {
+                pubkey: containers::validator::BlsPublicKey::default(),
+                index: Uint64(i as u64),
+            })
             .collect();
         (1763757427, validators)
     };
@@ -131,10 +173,15 @@ async fn main() {
         args.port,
         args.bootnodes,
     ));
-    let mut network_service = NetworkService::new(
+    
+    let peer_count = Arc::new(AtomicU64::new(0));
+    let peer_count_for_status = peer_count.clone();
+    
+    let mut network_service = NetworkService::new_with_peer_count(
         network_service_config.clone(),
         outbound_p2p_receiver,
         chain_message_sender,
+        peer_count,
     )
     .await
     .expect("Failed to create network service");
@@ -148,6 +195,10 @@ async fn main() {
     let chain_handle = task::spawn(async move {
         let mut tick_interval = interval(Duration::from_millis(1500));
         let mut last_logged_slot = 0u64;
+        let mut last_status_slot: Option<u64> = None;
+        let mut tick_count: u64 = 0;
+        
+        let peer_count = peer_count_for_status;
 
         loop {
             tokio::select! {
@@ -159,7 +210,27 @@ async fn main() {
                         .as_secs();
                     on_tick(&mut store, now, false);
 
-                    let current_slot = store.time / 8;
+                    let current_slot = store.time / INTERVALS_PER_SLOT;
+                    let current_interval = store.time % INTERVALS_PER_SLOT;
+
+                    if last_status_slot != Some(current_slot) {
+                        let peers = peer_count.load(Ordering::Relaxed);
+                        print_chain_status(&store, peers);
+                        last_status_slot = Some(current_slot);
+                    }
+
+                    match current_interval {
+                        2 => {
+                            info!(slot = current_slot, tick = tick_count, "Computing safe target");
+                        }
+                        3 => {
+                            info!(slot = current_slot, tick = tick_count, "Accepting new attestations");
+                        }
+                        _ => {}
+                    }
+
+                    tick_count += 1;
+
                     if current_slot != last_logged_slot && current_slot % 10 == 0 {
                         debug!("(Okay)Store time updated : slot {}, pending blocks: {}",
                             current_slot,
@@ -170,17 +241,36 @@ async fn main() {
                 }
                 message = chain_message_receiver.recv() => {
                     let Some(message) = message else { break };
-                    info!("Received chain message: {}", message);
                     match message {
                         ChainMessage::ProcessBlock {
                             signed_block_with_attestation,
+                            should_gossip,
                             ..
                         } => {
+                            let block_slot = signed_block_with_attestation.message.block.slot.0;
+                            let proposer = signed_block_with_attestation.message.block.proposer_index.0;
+                            let block_root = Bytes32(signed_block_with_attestation.message.block.hash_tree_root());
+                            info!(
+                                slot = block_slot,
+                                block_root = %format!("0x{:x}", block_root.0),
+                                "Processing block built by Validator {}",
+                                proposer
+                            );
 
-                            // Queue mechanism
-                            match on_block(&mut store, signed_block_with_attestation) {
-                                Ok(()) => info!("Block processed successfully."),
+                            match on_block(&mut store, signed_block_with_attestation.clone()) {
+                                Ok(()) => {
+                                    info!("Block processed successfully");
 
+                                    if should_gossip {
+                                        if let Err(e) = outbound_p2p_sender.send(
+                                            OutboundP2pRequest::GossipBlockWithAttestation(signed_block_with_attestation)
+                                        ) {
+                                            warn!("Failed to gossip block: {}", e);
+                                        } else {
+                                            info!(slot = block_slot, "Broadcasted block");
+                                        }
+                                    }
+                                }
                                 Err(e) if e.starts_with("Problem processing block. Block queued") => {
                                     info!("{}", e);
                                 }
@@ -188,13 +278,35 @@ async fn main() {
                             }
                         }
                         ChainMessage::ProcessAttestation {
-                            signed_attestation, ..
+                            signed_attestation,
+                            should_gossip,
+                            ..
                         } => {
-                            if let Err(e) = on_attestation(&mut store, signed_attestation.message, false) {
-                                warn!("Error processing attestation: {}", e);
-                            }
-                            else {
-                                info!("Attestation processed successfully.");
+                            let att_slot = signed_attestation.message.data.slot.0;
+                            let source_slot = signed_attestation.message.data.source.slot.0;
+                            let target_slot = signed_attestation.message.data.target.slot.0;
+                            let validator_id = signed_attestation.message.validator_id.0;
+                            info!(
+                                slot = att_slot,
+                                source_slot = source_slot,
+                                target_slot = target_slot,
+                                "Processing attestation by Validator {}",
+                                validator_id
+                            );
+
+                            match on_attestation(&mut store, signed_attestation.message.clone(), false) {
+                                Ok(()) => {
+                                    if should_gossip {
+                                        if let Err(e) = outbound_p2p_sender.send(
+                                            OutboundP2pRequest::GossipAttestation(signed_attestation)
+                                        ) {
+                                            warn!("Failed to gossip attestation: {}", e);
+                                        } else {
+                                            info!(slot = att_slot, "Broadcasted attestation");
+                                        }
+                                    }
+                                }
+                                Err(e) => warn!("Error processing attestation: {}", e),
                             }
                         }
                     }
