@@ -20,7 +20,7 @@ use libp2p::{
 use libp2p_identity::{Keypair, PeerId};
 use parking_lot::Mutex;
 use tokio::select;
-use tokio::time::{interval, Duration, MissedTickBehavior};
+use tokio::time::{Duration, MissedTickBehavior, interval};
 use tracing::{info, trace, warn};
 
 use crate::{
@@ -28,7 +28,7 @@ use crate::{
     compressor::Compressor,
     gossipsub::{self, config::GossipsubConfig, message::GossipsubMessage, topic::GossipsubKind},
     network::behaviour::{LeanNetworkBehaviour, LeanNetworkBehaviourEvent},
-    req_resp::{self, LeanRequest, ReqRespMessage, STATUS_PROTOCOL_V1, BLOCKS_BY_ROOT_PROTOCOL_V1},
+    req_resp::{self, BLOCKS_BY_ROOT_PROTOCOL_V1, LeanRequest, ReqRespMessage, STATUS_PROTOCOL_V1},
     types::{
         ChainMessage, ChainMessageSink, ConnectionState, OutboundP2pRequest, P2pRequestSource,
     },
@@ -104,7 +104,8 @@ where
             outbound_p2p_requests,
             chain_message_sink,
             Arc::new(AtomicU64::new(0)),
-        ).await
+        )
+        .await
     }
 
     pub async fn new_with_peer_count(
@@ -114,6 +115,23 @@ where
         peer_count: Arc<AtomicU64>,
     ) -> Result<Self> {
         let local_key = Keypair::generate_secp256k1();
+        Self::new_with_keypair(
+            network_config,
+            outbound_p2p_requests,
+            chain_message_sink,
+            peer_count,
+            local_key,
+        )
+        .await
+    }
+
+    pub async fn new_with_keypair(
+        network_config: Arc<NetworkServiceConfig>,
+        outbound_p2p_requests: R,
+        chain_message_sink: S,
+        peer_count: Arc<AtomicU64>,
+        local_key: Keypair,
+    ) -> Result<Self> {
         let behaviour = Self::build_behaviour(&local_key, &network_config)?;
 
         let config = Config::with_tokio_executor()
@@ -144,8 +162,7 @@ where
         Ok(service)
     }
 
-    pub async fn start(&mut self) -> Result<()>
-    {
+    pub async fn start(&mut self) -> Result<()> {
         // Periodic reconnect attempts to bootnodes
         let mut reconnect_interval = interval(Duration::from_secs(30));
         reconnect_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -186,31 +203,37 @@ where
                 // ConnectionLimits behaviour has no events
                 None
             }
-            SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
+            SwarmEvent::ConnectionEstablished {
+                peer_id, endpoint, ..
+            } => {
                 self.peer_table
                     .lock()
                     .insert(peer_id, ConnectionState::Connected);
-                
-                let connected = self.peer_table.lock()
+
+                let connected = self
+                    .peer_table
+                    .lock()
                     .values()
                     .filter(|s| **s == ConnectionState::Connected)
                     .count() as u64;
                 self.peer_count.store(connected, Ordering::Relaxed);
 
                 info!(peer = %peer_id, "Connected to peer (total: {})", connected);
-                
+
                 if endpoint.is_dialer() {
                     self.send_status_request(peer_id);
                 }
-                
+
                 None
             }
             SwarmEvent::ConnectionClosed { peer_id, .. } => {
                 self.peer_table
                     .lock()
                     .insert(peer_id, ConnectionState::Disconnected);
-                
-                let connected = self.peer_table.lock()
+
+                let connected = self
+                    .peer_table
+                    .lock()
                     .values()
                     .filter(|s| **s == ConnectionState::Connected)
                     .count() as u64;
@@ -231,7 +254,10 @@ where
                 warn!(?peer_id, ?error, "Failed to connect to peer");
                 None
             }
-            SwarmEvent::NewListenAddr { listener_id, address } => {
+            SwarmEvent::NewListenAddr {
+                listener_id,
+                address,
+            } => {
                 info!(?listener_id, ?address, "New listen address");
                 None
             }
@@ -252,7 +278,7 @@ where
             _ => {
                 info!(?event, "Unhandled swarm event");
                 None
-            },
+            }
         }
     }
 
@@ -270,7 +296,8 @@ where
                     Ok(GossipsubMessage::Block(signed_block_with_attestation)) => {
                         let slot = signed_block_with_attestation.message.block.slot.0;
 
-                        if let Err(err) = self.chain_message_sink
+                        if let Err(err) = self
+                            .chain_message_sink
                             .send(ChainMessage::ProcessBlock {
                                 signed_block_with_attestation,
                                 is_trusted: false,
@@ -278,13 +305,16 @@ where
                             })
                             .await
                         {
-                            warn!("failed to send block with attestation for slot {slot} to chain: {err:?}");
+                            warn!(
+                                "failed to send block with attestation for slot {slot} to chain: {err:?}"
+                            );
                         }
                     }
                     Ok(GossipsubMessage::Attestation(signed_attestation)) => {
                         let slot = signed_attestation.message.data.slot.0;
 
-                        if let Err(err) = self.chain_message_sink
+                        if let Err(err) = self
+                            .chain_message_sink
                             .send(ChainMessage::ProcessAttestation {
                                 signed_attestation: signed_attestation,
                                 is_trusted: false,
@@ -303,24 +333,22 @@ where
             _ => {
                 info!(?event, "Unhandled gossipsub event");
             }
-        }        
+        }
         None
     }
 
-    fn handle_request_response_event(
-        &mut self,
-        _event: ReqRespMessage,
-    ) -> Option<NetworkEvent> {
+    fn handle_request_response_event(&mut self, _event: ReqRespMessage) -> Option<NetworkEvent> {
         info!(?_event, "RequestResponse event");
         None
     }
 
-    fn handle_identify_event(
-        &mut self,
-        event: identify::Event,
-    ) -> Option<NetworkEvent> {
+    fn handle_identify_event(&mut self, event: identify::Event) -> Option<NetworkEvent> {
         match event {
-            identify::Event::Received { peer_id, info, connection_id: _ } => {
+            identify::Event::Received {
+                peer_id,
+                info,
+                connection_id: _,
+            } => {
                 info!(
                     peer = %peer_id,
                     agent_version = %info.agent_version,
@@ -332,7 +360,10 @@ where
 
                 None
             }
-            identify::Event::Sent { peer_id, connection_id: _ } => {
+            identify::Event::Sent {
+                peer_id,
+                connection_id: _,
+            } => {
                 info!(peer = %peer_id, "Sent identify info");
                 None
             }
@@ -340,7 +371,11 @@ where
                 info!(peer = %peer_id, "Pushed identify update");
                 None
             }
-            identify::Event::Error { peer_id, error, connection_id: _ } => {
+            identify::Event::Error {
+                peer_id,
+                error,
+                connection_id: _,
+            } => {
                 warn!(peer = %peer_id, ?error, "Identify error");
                 None
             }
@@ -356,7 +391,10 @@ where
                 && peer_id != self.local_peer_id()
             {
                 let current_state = self.peer_table.lock().get(&peer_id).cloned();
-                if !matches!(current_state, Some(ConnectionState::Disconnected | ConnectionState::Connecting) | None) {
+                if !matches!(
+                    current_state,
+                    Some(ConnectionState::Disconnected | ConnectionState::Connecting) | None
+                ) {
                     trace!(?peer_id, "Already connected");
                     continue;
                 }
@@ -438,20 +476,28 @@ where
     pub fn swarm_mut(&mut self) -> &mut Swarm<LeanNetworkBehaviour> {
         &mut self.swarm
     }
-    
+
     fn send_status_request(&mut self, peer_id: PeerId) {
         let status = containers::Status::default();
         let request = LeanRequest::Status(status);
-        
+
         info!(peer = %peer_id, "Sending Status request for handshake");
-        let _request_id = self.swarm.behaviour_mut().req_resp.send_request(&peer_id, request);
+        let _request_id = self
+            .swarm
+            .behaviour_mut()
+            .req_resp
+            .send_request(&peer_id, request);
     }
-    
-    pub fn send_blocks_by_root_request(&mut self, peer_id: PeerId, roots: Vec<containers::Bytes32>) {
+
+    pub fn send_blocks_by_root_request(
+        &mut self,
+        peer_id: PeerId,
+        roots: Vec<containers::Bytes32>,
+    ) {
         if roots.is_empty() {
             return;
         }
-        
+
         if roots.len() > req_resp::MAX_REQUEST_BLOCKS {
             warn!(
                 peer = %peer_id,
@@ -461,20 +507,27 @@ where
             );
             return;
         }
-        
+
         let request = LeanRequest::BlocksByRoot(roots.clone());
         info!(peer = %peer_id, num_roots = roots.len(), "Sending BlocksByRoot request");
-        let _request_id = self.swarm.behaviour_mut().req_resp.send_request(&peer_id, request);
+        let _request_id = self
+            .swarm
+            .behaviour_mut()
+            .req_resp
+            .send_request(&peer_id, request);
     }
 
-    fn build_behaviour(local_key: &Keypair, cfg: &NetworkServiceConfig) -> Result<LeanNetworkBehaviour> {
+    fn build_behaviour(
+        local_key: &Keypair,
+        cfg: &NetworkServiceConfig,
+    ) -> Result<LeanNetworkBehaviour> {
         let identify = Self::build_identify(local_key);
         let gossipsub = gossipsub::GossipsubBehaviour::new_with_transform(
             MessageAuthenticity::Anonymous,
             cfg.gossipsub_config.config.clone(),
             Compressor::default(),
         )
-            .map_err(|err| anyhow!("Failed to create gossipsub behaviour: {err:?}"))?;
+        .map_err(|err| anyhow!("Failed to create gossipsub behaviour: {err:?}"))?;
 
         let req_resp = req_resp::build(vec![
             STATUS_PROTOCOL_V1.to_string(),
@@ -488,7 +541,12 @@ where
                 .with_max_established_per_peer(Some(2)),
         );
 
-        Ok(LeanNetworkBehaviour { identify, req_resp, gossipsub, connection_limits })
+        Ok(LeanNetworkBehaviour {
+            identify,
+            req_resp,
+            gossipsub,
+            connection_limits,
+        })
     }
 
     fn build_identify(local_key: &Keypair) -> identify::Behaviour {
@@ -508,7 +566,8 @@ where
     }
 
     fn listen(&mut self, addr: &Multiaddr) -> Result<()> {
-        self.swarm.listen_on(addr.clone())
+        self.swarm
+            .listen_on(addr.clone())
             .map_err(|e| anyhow!("Failed to listen on {addr:?}: {e:?}"))?;
         info!(?addr, "Listening on");
         Ok(())
@@ -516,7 +575,9 @@ where
 
     fn subscribe_to_topics(&mut self) -> Result<()> {
         for topic in &self.network_config.gossipsub_config.topics {
-            self.swarm.behaviour_mut().gossipsub
+            self.swarm
+                .behaviour_mut()
+                .gossipsub
                 .subscribe(&IdentTopic::from(topic.clone()))
                 .map_err(|e| anyhow!("Subscribe failed for {topic:?}: {e:?}"))?;
             info!(topic = %topic, "Subscribed to topic");

@@ -4,13 +4,10 @@ use containers::{
 };
 use ssz::SszHash;
 use std::collections::HashMap;
-
-// CONSTS
 pub type Interval = u64;
-pub const INTERVALS_PER_SLOT: Interval = 8;
-pub const SECONDS_PER_SLOT: u64 = 12;
+pub const INTERVALS_PER_SLOT: Interval = 4;
+pub const SECONDS_PER_SLOT: u64 = 4;
 
-// STORE
 #[derive(Debug, Clone, Default)]
 pub struct Store {
     pub time: Interval,
@@ -34,7 +31,6 @@ pub fn get_forkchoice_store(
     let block_root = Bytes32(anchor_block.message.block.hash_tree_root());
     let block_slot = anchor_block.message.block.slot;
 
-    // For genesis, set justified/finalized to the anchor block if they're zero
     let latest_justified = if anchor_state.latest_justified.root.0.is_zero() {
         Checkpoint {
             root: block_root,
@@ -162,7 +158,12 @@ pub fn update_head(store: &mut Store) {
         }
     }
 
-    let new_head = get_fork_choice_head(store, store.latest_justified.root, &store.latest_known_votes, 0);
+    let new_head = get_fork_choice_head(
+        store,
+        store.latest_justified.root,
+        &store.latest_known_votes,
+        0,
+    );
     store.head = new_head;
 
     if let Some(state) = store.states.get(&store.head) {
@@ -202,7 +203,6 @@ pub fn accept_new_votes(store: &mut Store) {
     update_head(store);
 }
 
-// pakeist
 pub fn tick_interval(store: &mut Store, has_proposal: bool) {
     store.time += 1;
     let curr_interval = store.time % INTERVALS_PER_SLOT;

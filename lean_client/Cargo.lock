@@ -2460,6 +2460,8 @@ dependencies = [
  "clap",
  "containers",
  "fork-choice",
+ "hex",
+ "libp2p-identity 0.2.12",
  "networking",
  "tokio",
  "tracing",
@@ -5335,6 +5337,13 @@ dependencies = [
 [[package]]
 name = "validator"
 version = "0.1.0"
+dependencies = [
+ "containers",
+ "fork-choice",
+ "serde",
+ "serde_yaml",
+ "tracing",
+]
 
 [[package]]
 name = "valuable"
