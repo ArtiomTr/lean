@@ -1,10 +1,14 @@
 use containers::{
-    Attestation, Attestations, BlockSignatures, BlockWithAttestation, Config, SignedBlockWithAttestation, block::{Block, BlockBody, BlockHeader, SignedBlock, hash_tree_root}, checkpoint::Checkpoint, slot::Slot, state::State, types::{Bytes32, ValidatorIndex}
+    Attestation, Attestations, BlockSignatures, BlockWithAttestation, Config, SignedBlockWithAttestation, block::{Block, BlockBody, BlockHeader, hash_tree_root}, checkpoint::Checkpoint, slot::Slot, state::State, types::{Bytes32, ValidatorIndex}, Validators
 };
 use ssz::PersistentList as List;
-use typenum::U4096;
 
 pub const DEVNET_CONFIG_VALIDATOR_REGISTRY_LIMIT: usize = 1 << 12; // 4096
+pub const TEST_VALIDATOR_COUNT: usize = 4; // Actual validator count used in tests
+
+// Compile-time assertion: ensure test validator count does not exceed the registry limit.
+const _: [(); DEVNET_CONFIG_VALIDATOR_REGISTRY_LIMIT - TEST_VALIDATOR_COUNT] =
+    [(); DEVNET_CONFIG_VALIDATOR_REGISTRY_LIMIT - TEST_VALIDATOR_COUNT];
 
 pub fn create_block(slot: u64, parent_header: &mut BlockHeader, attestations: Option<Attestations>) -> SignedBlockWithAttestation {
     let body = BlockBody {
@@ -29,7 +33,7 @@ pub fn create_block(slot: u64, parent_header: &mut BlockHeader, attestations: Op
 }
 
 pub fn create_attestations(indices: &[usize]) -> Vec<bool> {
-    let mut attestations = vec![false; DEVNET_CONFIG_VALIDATOR_REGISTRY_LIMIT];
+    let mut attestations = vec![false; TEST_VALIDATOR_COUNT];
     for &index in indices {
         if index < attestations.len() {
             attestations[index] = true;
@@ -56,7 +60,22 @@ pub fn sample_checkpoint() -> Checkpoint {
 }
 
 pub fn base_state(config: Config) -> State {
-    use containers::{HistoricalBlockHashes, JustificationRoots, JustifiedSlots, JustificationsValidators};
+    base_state_with_validators(config, TEST_VALIDATOR_COUNT)
+}
+
+pub fn base_state_with_validators(config: Config, num_validators: usize) -> State {
+    use containers::{HistoricalBlockHashes, JustificationRoots, JustifiedSlots, JustificationsValidators, validator::Validator, Uint64};
+    
+    // Create validators list with the specified number of validators
+    let mut validators = Validators::default();
+    for i in 0..num_validators {
+        let validator = Validator {
+            pubkey: Default::default(),
+            index: Uint64(i as u64),
+        };
+        validators.push(validator).expect("within limit");
+    }
+    
     State {
         config,
         slot: Slot(0),
@@ -65,7 +84,7 @@ pub fn base_state(config: Config) -> State {
         latest_finalized: sample_checkpoint(),
         historical_block_hashes: HistoricalBlockHashes::default(),
         justified_slots: JustifiedSlots::default(),
-        validators: List::default(),
+        validators,
         justifications_roots: JustificationRoots::default(),
         justifications_validators: JustificationsValidators::default(),
     }

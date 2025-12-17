@@ -1,4 +1,5 @@
 use std::io;
+use std::io::{Read, Write};
 
 use async_trait::async_trait;
 use containers::{Bytes32, SignedBlockWithAttestation, Status};
@@ -7,7 +8,8 @@ use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use libp2p::request_response::{
     Behaviour as RequestResponse, Codec, Config, Event, ProtocolSupport,
 };
-use snap::raw::{Decoder, Encoder};
+use snap::read::FrameDecoder;
+use snap::write::FrameEncoder;
 
 pub const MAX_REQUEST_BLOCKS: usize = 1024;
 
@@ -40,16 +42,20 @@ pub enum LeanResponse {
 pub struct LeanCodec;
 
 impl LeanCodec {
+    /// Compress data using Snappy framing format (required for req/resp protocol)
     fn compress(data: &[u8]) -> io::Result<Vec<u8>> {
-        let mut encoder = Encoder::new();
-        encoder.compress_vec(data)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Snappy compression failed: {e}")))
+        let mut encoder = FrameEncoder::new(Vec::new());
+        encoder.write_all(data)?;
+        encoder.into_inner()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Snappy framing failed: {e}")))
     }
 
+    /// Decompress data using Snappy framing format (required for req/resp protocol)
     fn decompress(data: &[u8]) -> io::Result<Vec<u8>> {
-        let mut decoder = Decoder::new();
-        decoder.decompress_vec(data)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Snappy decompression failed: {e}")))
+        let mut decoder = FrameDecoder::new(data);
+        let mut decompressed = Vec::new();
+        decoder.read_to_end(&mut decompressed)?;
+        Ok(decompressed)
     }
 
     fn encode_request(request: &LeanRequest) -> io::Result<Vec<u8>> {

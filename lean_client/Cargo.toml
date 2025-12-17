@@ -1,5 +1,5 @@
 [workspace]
-members = ["chain", "containers", "fork_choice"]
+members = ["chain", "containers", "fork_choice", "networking", "validator"]
 resolver = "2"
 
 [workspace.package]
@@ -51,6 +51,10 @@ name = "lean_client"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["xmss-signing"]
+xmss-signing = ["validator/xmss-signing"]
+
 [dependencies]
 chain = { path = "./chain" }
 containers = { path = "./containers" }
@@ -61,3 +65,5 @@ tokio = { version = "1.0", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 tracing = "0.1.41"
+hex = "0.4"
+libp2p-identity = { version = "0.2", features = ["secp256k1"] }

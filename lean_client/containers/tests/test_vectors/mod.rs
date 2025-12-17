@@ -2,12 +2,13 @@
 pub mod runner;
 pub mod block_processing;
 pub mod genesis;
+pub mod verify_signatures;
 
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use containers::{
-    Slot, block::Block, state::State
+    Slot, block::Block, block::SignedBlockWithAttestation, state::State
 };
 
 /// Custom deserializer that handles both plain values and {"data": T} wrapper format
@@ -79,4 +80,23 @@ pub struct Info {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TestVector {
     pub test_case: Vec<TestCase>,
+}
+
+/// Top-level wrapper for verify_signatures test vector files
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VerifySignaturesTestVectorFile {
+    #[serde(flatten)]
+    pub tests: HashMap<String, VerifySignaturesTestCase>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VerifySignaturesTestCase {
+    pub network: String,
+    pub anchor_state: State,
+    pub signed_block_with_attestation: SignedBlockWithAttestation,
+    #[serde(default)]
+    pub expect_exception: Option<String>,
+    #[serde(rename = "_info")]
+    pub info: Info,
 }

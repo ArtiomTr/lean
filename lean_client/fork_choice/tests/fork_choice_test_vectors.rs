@@ -4,7 +4,7 @@ use fork_choice::{
 };
 
 use containers::{
-    attestation::{Attestation, AttestationData, BlockSignatures},
+    attestation::{Attestation, AttestationData, BlockSignatures, SignedAttestation, Signature},
     block::{hash_tree_root, Block, BlockBody, BlockHeader, BlockWithAttestation, SignedBlockWithAttestation},
     checkpoint::Checkpoint,
     config::Config,
@@ -13,6 +13,7 @@ use containers::{
 };
 
 use serde::Deserialize;
+use ssz::SszHash;
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 
@@ -380,10 +381,12 @@ fn initialize_state_from_test(test_state: &TestAnchorState) -> State {
     }
 
     let mut validators = List::default();
-    for i in 0..test_state.validators.data.len() {
+    for test_validator in &test_state.validators.data {
+        let pubkey = containers::validator::BlsPublicKey::from_hex(&test_validator.pubkey)
+            .expect("Failed to parse validator pubkey");
         let validator = containers::validator::Validator {
-            pubkey: containers::validator::BlsPublicKey::default(),
-            index: containers::Uint64(i as u64),
+            pubkey,
+            index: containers::Uint64(test_validator.index),
         };
         validators.push(validator).expect("Failed to add validator");
     }
@@ -440,9 +443,9 @@ fn verify_checks(
                 .map(|b| b.message.block.slot.0)
                 .unwrap_or(0);
             return Err(format!(
-                "Step {}: Head root mismatch for label '{}' - expected slot {}, got slot {} (known_votes: {}, new_votes: {})",
+                "Step {}: Head root mismatch for label '{}' - expected slot {}, got slot {} (known_attestations: {}, new_attestations: {})",
                 step_idx, label, expected_slot, actual_slot,
-                store.latest_known_votes.len(), store.latest_new_votes.len()
+                store.latest_known_attestations.len(), store.latest_new_attestations.len()
             ));
         }
     }
@@ -453,26 +456,26 @@ fn verify_checks(
 
             match check.location.as_str() {
                 "new" => {
-                    if !store.latest_new_votes.contains_key(&validator) {
+                    if !store.latest_new_attestations.contains_key(&validator) {
                         return Err(format!(
-                            "Step {}: Expected validator {} in new votes, but not found",
+                            "Step {}: Expected validator {} in new attestations, but not found",
                             step_idx, check.validator
                         ));
                     }
                     if let Some(target_slot) = check.target_slot {
-                        let vote = &store.latest_new_votes[&validator];
-                        if vote.slot.0 != target_slot {
+                        let attestation = &store.latest_new_attestations[&validator];
+                        if attestation.message.data.target.slot.0 != target_slot {
                             return Err(format!(
-                                "Step {}: Validator {} new vote target slot mismatch - expected {}, got {}",
-                                step_idx, check.validator, target_slot, vote.slot.0
+                                "Step {}: Validator {} new attestation target slot mismatch - expected {}, got {}",
+                                step_idx, check.validator, target_slot, attestation.message.data.target.slot.0
                             ));
                         }
                     }
                 }
                 "known" => {
-                    if !store.latest_known_votes.contains_key(&validator) {
+                    if !store.latest_known_attestations.contains_key(&validator) {
                         return Err(format!(
-                            "Step {}: Expected validator {} in known votes, but not found",
+                            "Step {}: Expected validator {} in known attestations, but not found",
                             step_idx, check.validator
                         ));
                     }
@@ -522,8 +525,15 @@ fn run_single_test(_test_name: &str, test: TestVector) -> Result<(), String> {
 
                 let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
                     let signed_block = convert_test_block(test_block);
+                    let block_root = Bytes32(signed_block.message.block.hash_tree_root());
 
-                    on_block(&mut store, signed_block)
+                    // Advance time to the block's slot to ensure attestations are processable
+                    // SECONDS_PER_SLOT is 4 (not 12)
+                    let block_time = store.config.genesis_time + (signed_block.message.block.slot.0 * 4);
+                    on_tick(&mut store, block_time, false);
+
+                    on_block(&mut store, signed_block)?;
+                    Ok(block_root)
                 }));
 
                 let result = match result {
@@ -531,9 +541,9 @@ fn run_single_test(_test_name: &str, test: TestVector) -> Result<(), String> {
                     Err(e) => Err(format!("Panic: {:?}", e)),
                 };
 
-                if result.is_ok() {
+                if let Ok(block_root) = &result {
                     if let Some(label) = &test_block.block_root_label {
-                        block_labels.insert(label.clone(), store.head);
+                        block_labels.insert(label.clone(), *block_root);
                     }
                 }
 
@@ -572,8 +582,12 @@ fn run_single_test(_test_name: &str, test: TestVector) -> Result<(), String> {
                     .ok_or_else(|| format!("Step {}: Missing attestation data", step_idx))?;
 
                 let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    let signed_vote = convert_test_attestation(test_att);
-                    on_attestation(&mut store, signed_vote, false)
+                    let attestation = convert_test_attestation(test_att);
+                    let signed_attestation = SignedAttestation {
+                        message: attestation,
+                        signature: Signature::default(),
+                    };
+                    on_attestation(&mut store, signed_attestation, false)
                 }));
 
                 let result = match result {

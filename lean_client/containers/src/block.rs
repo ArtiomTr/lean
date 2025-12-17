@@ -37,6 +37,7 @@ pub struct Block {
 
 /// Bundle containing a block and the proposer's attestation.
 #[derive(Clone, Debug, PartialEq, Eq, Ssz, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BlockWithAttestation {
     /// The proposed block message.
     pub block: Block,
@@ -46,12 +47,14 @@ pub struct BlockWithAttestation {
 
 /// Envelope carrying a block, an attestation from proposer, and aggregated signatures.
 #[derive(Clone, Debug, PartialEq, Eq, Ssz, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SignedBlockWithAttestation {
     /// The block plus an attestation from proposer being signed.
     pub message: BlockWithAttestation,
     /// Aggregated signature payload for the block.
     ///
     /// Signatures remain in attestation order followed by the proposer signature.
+    #[serde(with = "crate::serde_helpers::block_signatures")]
     pub signature: BlockSignatures,
 }
 

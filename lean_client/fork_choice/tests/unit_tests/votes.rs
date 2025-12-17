@@ -1,70 +1,96 @@
 use super::common::create_test_store;
 use fork_choice::handlers::on_attestation;
-use fork_choice::store::{accept_new_votes, INTERVALS_PER_SLOT};
+use fork_choice::store::{accept_new_attestations, INTERVALS_PER_SLOT};
 use containers::{
-    attestation::{Attestation, AttestationData},
+    attestation::{Attestation, AttestationData, SignedAttestation, Signature},
     checkpoint::Checkpoint,
     Bytes32, Slot, Uint64, ValidatorIndex,
 };
 
+fn create_signed_attestation(validator_id: u64, slot: Slot, head_root: Bytes32) -> SignedAttestation {
+    SignedAttestation {
+        message: Attestation {
+            validator_id: Uint64(validator_id),
+            data: AttestationData {
+                slot,
+                head: Checkpoint { root: head_root, slot },
+                target: Checkpoint { root: head_root, slot },
+                source: Checkpoint { root: Bytes32::default(), slot: Slot(0) },
+            },
+        },
+        signature: Signature::default(),
+    }
+}
+
 #[test]
-fn test_accept_new_votes() {
+fn test_accept_new_attestations() {
     let mut store = create_test_store();
 
-    // Setup initial known votes
+    // Setup initial known attestations
     let val1 = ValidatorIndex(1);
     let val2 = ValidatorIndex(2);
     let val3 = ValidatorIndex(3);
 
-    store.latest_known_votes.insert(val1, Checkpoint { root: store.head, slot: Slot(0) });
+    store.latest_known_attestations.insert(
+        val1,
+        create_signed_attestation(1, Slot(0), store.head),
+    );
 
-    // Val1 updates their vote to Slot 1
-    store.latest_new_votes.insert(val1, Checkpoint { root: store.head, slot: Slot(1) });
-    // Val2 casts a new vote for Slot 1
-    store.latest_new_votes.insert(val2, Checkpoint { root: store.head, slot: Slot(1) });
-    // Val3 casts a new vote for Slot 2
-    store.latest_new_votes.insert(val3, Checkpoint { root: store.head, slot: Slot(2) });
+    // Val1 updates their attestation to Slot 1
+    store.latest_new_attestations.insert(
+        val1,
+        create_signed_attestation(1, Slot(1), store.head),
+    );
+    // Val2 casts a new attestation for Slot 1
+    store.latest_new_attestations.insert(
+        val2,
+        create_signed_attestation(2, Slot(1), store.head),
+    );
+    // Val3 casts a new attestation for Slot 2
+    store.latest_new_attestations.insert(
+        val3,
+        create_signed_attestation(3, Slot(2), store.head),
+    );
 
-    accept_new_votes(&mut store);
+    accept_new_attestations(&mut store);
 
-    assert_eq!(store.latest_new_votes.len(), 0);
-    assert_eq!(store.latest_known_votes.len(), 3);
+    assert_eq!(store.latest_new_attestations.len(), 0);
+    assert_eq!(store.latest_known_attestations.len(), 3);
 
-    assert_eq!(store.latest_known_votes[&val1].slot, Slot(1));
-    assert_eq!(store.latest_known_votes[&val2].slot, Slot(1));
-    assert_eq!(store.latest_known_votes[&val3].slot, Slot(2));
+    assert_eq!(store.latest_known_attestations[&val1].message.data.slot, Slot(1));
+    assert_eq!(store.latest_known_attestations[&val2].message.data.slot, Slot(1));
+    assert_eq!(store.latest_known_attestations[&val3].message.data.slot, Slot(2));
 }
 
 #[test]
-fn test_accept_new_votes_multiple() {
+fn test_accept_new_attestations_multiple() {
     let mut store = create_test_store();
     
     for i in 0..5 {
-        let checkpoint = Checkpoint {
-            root: store.head, // Validators voting for the head (genesis)
-            slot: Slot(i),
-        };
-        store.latest_new_votes.insert(ValidatorIndex(i), checkpoint);
+        store.latest_new_attestations.insert(
+            ValidatorIndex(i),
+            create_signed_attestation(i, Slot(i), store.head),
+        );
     }
     
-    assert_eq!(store.latest_new_votes.len(), 5);
-    assert_eq!(store.latest_known_votes.len(), 0);
+    assert_eq!(store.latest_new_attestations.len(), 5);
+    assert_eq!(store.latest_known_attestations.len(), 0);
     
-    accept_new_votes(&mut store);
+    accept_new_attestations(&mut store);
     
-    assert_eq!(store.latest_new_votes.len(), 0);
-    assert_eq!(store.latest_known_votes.len(), 5);
+    assert_eq!(store.latest_new_attestations.len(), 0);
+    assert_eq!(store.latest_known_attestations.len(), 5);
 }
 
 #[test]
-fn test_accept_new_votes_empty() {
+fn test_accept_new_attestations_empty() {
     let mut store = create_test_store();
-    let initial_known = store.latest_known_votes.len();
+    let initial_known = store.latest_known_attestations.len();
     
-    accept_new_votes(&mut store);
+    accept_new_attestations(&mut store);
     
-    assert_eq!(store.latest_new_votes.len(), 0);
-    assert_eq!(store.latest_known_votes.len(), initial_known);
+    assert_eq!(store.latest_new_attestations.len(), 0);
+    assert_eq!(store.latest_known_attestations.len(), initial_known);
 }
 
 #[test]
@@ -75,69 +101,41 @@ fn test_on_attestation_lifecycle() {
     let slot_1 = Slot(1);
 
     // 1. Attestation from network (gossip)
-    let attestation_gossip = Attestation {
-        validator_id: Uint64(validator_idx.0),
-        data: AttestationData {
-            slot: slot_0,
-            head: Checkpoint::default(),
-            target: Checkpoint { root: Bytes32::default(), slot: slot_0 },
-            source: Checkpoint::default(),
-        },
-    };
+    let signed_attestation_gossip = create_signed_attestation(1, slot_0, store.head);
 
-    on_attestation(&mut store, attestation_gossip.clone(), false).expect("Gossip attestation valid");
+    on_attestation(&mut store, signed_attestation_gossip.clone(), false).expect("Gossip attestation valid");
     
-    // Should be in new_votes, not known_votes
-    assert!(store.latest_new_votes.contains_key(&validator_idx));
-    assert!(!store.latest_known_votes.contains_key(&validator_idx));
-    assert_eq!(store.latest_new_votes[&validator_idx].slot, slot_0);
+    // Should be in new_attestations, not known_attestations
+    assert!(store.latest_new_attestations.contains_key(&validator_idx));
+    assert!(!store.latest_known_attestations.contains_key(&validator_idx));
+    assert_eq!(store.latest_new_attestations[&validator_idx].message.data.slot, slot_0);
 
     // 2. Same attestation included in a block
-    on_attestation(&mut store, attestation_gossip, true).expect("Block attestation valid");
+    on_attestation(&mut store, signed_attestation_gossip, true).expect("Block attestation valid");
     
-    assert!(store.latest_known_votes.contains_key(&validator_idx));
-    assert_eq!(store.latest_known_votes[&validator_idx].slot, slot_0);
+    assert!(store.latest_known_attestations.contains_key(&validator_idx));
+    assert_eq!(store.latest_known_attestations[&validator_idx].message.data.slot, slot_0);
 
     // 3. Newer attestation from network
     store.time = 1 * INTERVALS_PER_SLOT; // Advance time
-    let attestation_next = Attestation {
-        validator_id: Uint64(validator_idx.0),
-        data: AttestationData {
-            slot: slot_1,
-            head: Checkpoint::default(),
-            target: Checkpoint { root: Bytes32::default(), slot: slot_1 },
-            source: Checkpoint::default(),
-        },
-    };
+    let signed_attestation_next = create_signed_attestation(1, slot_1, store.head);
 
-    on_attestation(&mut store, attestation_next, false).expect("Next gossip attestation valid");
+    on_attestation(&mut store, signed_attestation_next, false).expect("Next gossip attestation valid");
 
-    // Should update new_votes
-    assert_eq!(store.latest_new_votes[&validator_idx].slot, slot_1);
-    // Known votes should still be at slot 0 until accepted
-    assert_eq!(store.latest_known_votes[&validator_idx].slot, slot_0);
+    // Should update new_attestations
+    assert_eq!(store.latest_new_attestations[&validator_idx].message.data.slot, slot_1);
+    // Known attestations should still be at slot 0 until accepted
+    assert_eq!(store.latest_known_attestations[&validator_idx].message.data.slot, slot_0);
 }
 
 #[test]
 fn test_on_attestation_future_slot() {
     let mut store = create_test_store();
-    let validator_idx = ValidatorIndex(1);
-    let future_slot = Slot(100); //Latter in the future
+    let future_slot = Slot(100); // Far in the future
     
-    let attestation = Attestation {
-        validator_id: Uint64(validator_idx.0),
-        data: AttestationData {
-            slot: future_slot,
-            head: Checkpoint::default(),
-            target: Checkpoint {
-                root: Bytes32::default(),
-                slot: future_slot,
-            },
-            source: Checkpoint::default(),
-        },
-    };
+    let signed_attestation = create_signed_attestation(1, future_slot, store.head);
 
-    let result = on_attestation(&mut store, attestation, false);
+    let result = on_attestation(&mut store, signed_attestation, false);
     assert!(result.is_err());
 }
 
@@ -146,42 +144,20 @@ fn test_on_attestation_update_vote() {
     let mut store = create_test_store();
     let validator_idx = ValidatorIndex(1);
     
-    // First vote at slot 0
-    let attestation1 = Attestation {
-        validator_id: Uint64(validator_idx.0),
-        data: AttestationData {
-            slot: Slot(0),
-            head: Checkpoint::default(),
-            target: Checkpoint {
-                root: Bytes32::default(),
-                slot: Slot(0),
-            },
-            source: Checkpoint::default(),
-        },
-    };
+    // First attestation at slot 0
+    let signed_attestation1 = create_signed_attestation(1, Slot(0), store.head);
     
-    on_attestation(&mut store, attestation1, false).expect("First vote valid");
-    assert_eq!(store.latest_new_votes[&validator_idx].slot, Slot(0));
+    on_attestation(&mut store, signed_attestation1, false).expect("First attestation valid");
+    assert_eq!(store.latest_new_attestations[&validator_idx].message.data.slot, Slot(0));
     
     // Advance time to allow slot 1
     store.time = 1 * INTERVALS_PER_SLOT;
     
-    // Second vote at slot 1
-    let attestation2 = Attestation {
-        validator_id: Uint64(validator_idx.0),
-        data: AttestationData {
-            slot: Slot(1),
-            head: Checkpoint::default(),
-            target: Checkpoint {
-                root: Bytes32::default(),
-                slot: Slot(1),
-            },
-            source: Checkpoint::default(),
-        },
-    };
+    // Second attestation at slot 1
+    let signed_attestation2 = create_signed_attestation(1, Slot(1), store.head);
     
-    on_attestation(&mut store, attestation2, false).expect("Second vote valid");
-    assert_eq!(store.latest_new_votes[&validator_idx].slot, Slot(1));
+    on_attestation(&mut store, signed_attestation2, false).expect("Second attestation valid");
+    assert_eq!(store.latest_new_attestations[&validator_idx].message.data.slot, Slot(1));
 }
 
 #[test]
@@ -192,38 +168,58 @@ fn test_on_attestation_ignore_old_vote() {
     // Advance time
     store.time = 2 * INTERVALS_PER_SLOT;
     
-    // Newer vote first
-    let attestation_new = Attestation {
-        validator_id: Uint64(validator_idx.0),
-        data: AttestationData {
-            slot: Slot(2),
-            head: Checkpoint::default(),
-            target: Checkpoint {
-                root: Bytes32::default(),
-                slot: Slot(2),
-            },
-            source: Checkpoint::default(),
-        },
-    };
+    // Newer attestation first
+    let signed_attestation_new = create_signed_attestation(1, Slot(2), store.head);
     
-    on_attestation(&mut store, attestation_new, false).expect("New vote valid");
-    assert_eq!(store.latest_new_votes[&validator_idx].slot, Slot(2));
+    on_attestation(&mut store, signed_attestation_new, false).expect("New attestation valid");
+    assert_eq!(store.latest_new_attestations[&validator_idx].message.data.slot, Slot(2));
     
-    // Older vote second
-    let attestation_old = Attestation {
-        validator_id: Uint64(validator_idx.0),
-        data: AttestationData {
-            slot: Slot(1),
-            head: Checkpoint::default(),
-            target: Checkpoint {
-                root: Bytes32::default(),
-                slot: Slot(1),
-            },
-            source: Checkpoint::default(),
-        },
-    };
+    // Older attestation second
+    let signed_attestation_old = create_signed_attestation(1, Slot(1), store.head);
     
-    on_attestation(&mut store, attestation_old, false).expect("Old vote processed but ignored");
+    on_attestation(&mut store, signed_attestation_old, false).expect("Old attestation processed but ignored");
     // Should still be slot 2
-    assert_eq!(store.latest_new_votes[&validator_idx].slot, Slot(2));
+    assert_eq!(store.latest_new_attestations[&validator_idx].message.data.slot, Slot(2));
+}
+
+#[test]
+fn test_on_attestation_from_block_supersedes_new() {
+    let mut store = create_test_store();
+    let validator_idx = ValidatorIndex(1);
+    
+    // First, add attestation via gossip
+    let signed_attestation1 = create_signed_attestation(1, Slot(0), store.head);
+    on_attestation(&mut store, signed_attestation1, false).expect("Gossip attestation valid");
+    
+    assert!(store.latest_new_attestations.contains_key(&validator_idx));
+    assert!(!store.latest_known_attestations.contains_key(&validator_idx));
+    
+    // Then, add same attestation via block (on-chain)
+    let signed_attestation2 = create_signed_attestation(1, Slot(0), store.head);
+    on_attestation(&mut store, signed_attestation2, true).expect("Block attestation valid");
+    
+    // Should move from new to known
+    assert!(!store.latest_new_attestations.contains_key(&validator_idx));
+    assert!(store.latest_known_attestations.contains_key(&validator_idx));
+}
+
+#[test]
+fn test_on_attestation_newer_from_block_removes_older_new() {
+    let mut store = create_test_store();
+    let validator_idx = ValidatorIndex(1);
+    
+    // Add older attestation via gossip
+    let signed_attestation_gossip = create_signed_attestation(1, Slot(0), store.head);
+    on_attestation(&mut store, signed_attestation_gossip, false).expect("Gossip attestation valid");
+    
+    assert_eq!(store.latest_new_attestations[&validator_idx].message.data.slot, Slot(0));
+    
+    // Add newer attestation via block (on-chain)
+    store.time = 1 * INTERVALS_PER_SLOT;
+    let signed_attestation_block = create_signed_attestation(1, Slot(1), store.head);
+    on_attestation(&mut store, signed_attestation_block, true).expect("Block attestation valid");
+    
+    // New attestation should be removed (superseded by newer on-chain one)
+    assert!(!store.latest_new_attestations.contains_key(&validator_idx));
+    assert_eq!(store.latest_known_attestations[&validator_idx].message.data.slot, Slot(1));
 }

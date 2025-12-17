@@ -2,7 +2,7 @@ use std::{collections::HashMap, fmt::Display};
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use containers::{SignedAttestation, SignedBlockWithAttestation};
+use containers::{Bytes32, SignedAttestation, SignedBlockWithAttestation};
 use serde::Serialize;
 use tokio::sync::mpsc;
 
@@ -104,10 +104,11 @@ impl Display for ChainMessage {
 pub enum OutboundP2pRequest {
     GossipBlockWithAttestation(SignedBlockWithAttestation),
     GossipAttestation(SignedAttestation),
+    RequestBlocksByRoot(Vec<Bytes32>),
 }
 
 #[async_trait]
-pub trait ChainMessageSink<M>: Send + Sync {
+pub trait ChainMessageSink<M>: Send + Sync + Clone {
     async fn send(&self, message: M) -> Result<()>;
 }
 

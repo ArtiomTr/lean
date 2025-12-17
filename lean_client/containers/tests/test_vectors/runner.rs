@@ -582,4 +582,76 @@ impl TestRunner {
         Ok(())
     }
 
+    /// Test runner for verify_signatures test vectors
+    /// Tests XMSS signature verification on SignedBlockWithAttestation
+    pub fn run_verify_signatures_test<P: AsRef<Path>>(path: P) -> Result<(), Box<dyn std::error::Error>> {
+        let json_content = fs::read_to_string(path.as_ref())?;
+        
+        // Parse using the VerifySignaturesTestVectorFile structure
+        let test_file: VerifySignaturesTestVectorFile = serde_json::from_str(&json_content)?;
+        
+        // Get the first (and only) test case from the file
+        let (test_name, test_case) = test_file.tests.into_iter().next()
+            .ok_or("No test case found in JSON")?;
+        
+        println!("\n{}: {}", test_name, test_case.info.description);
+        
+        let anchor_state = test_case.anchor_state;
+        let signed_block = test_case.signed_block_with_attestation;
+        
+        // Print some debug info about what we're verifying
+        println!("  Block slot: {}", signed_block.message.block.slot.0);
+        println!("  Proposer index: {}", signed_block.message.block.proposer_index.0);
+        
+        // Count attestations
+        let mut attestation_count = 0u64;
+        loop {
+            match signed_block.message.block.body.attestations.get(attestation_count) {
+                Ok(_) => attestation_count += 1,
+                Err(_) => break,
+            }
+        }
+        println!("  Attestations in block: {}", attestation_count);
+        println!("  Proposer attestation validator: {}", signed_block.message.proposer_attestation.validator_id.0);
+        
+        // Count signatures
+        let mut signature_count = 0u64;
+        loop {
+            match signed_block.signature.get(signature_count) {
+                Ok(_) => signature_count += 1,
+                Err(_) => break,
+            }
+        }
+        println!("  Signatures: {}", signature_count);
+        
+        // Check if we expect this test to fail
+        if let Some(ref exception) = test_case.expect_exception {
+            println!("  Expecting exception: {}", exception);
+            
+            // Verify signatures - we expect this to fail (return false)
+            let result = signed_block.verify_signatures(anchor_state);
+            
+            if result {
+                println!("    \x1b[31m✗ FAIL: Signatures verified successfully but should have failed!\x1b[0m\n");
+                return Err("Expected signature verification to fail, but it succeeded".into());
+            } else {
+                println!("    ✓ Correctly rejected: Invalid signatures detected");
+                println!("\n\x1b[32m✓ PASS\x1b[0m\n");
+            }
+        } else {
+            // Valid test case - signatures should verify successfully
+            let result = signed_block.verify_signatures(anchor_state);
+            
+            if result {
+                println!("    ✓ All signatures verified successfully");
+                println!("\n\x1b[32m✓ PASS\x1b[0m\n");
+            } else {
+                println!("    \x1b[31m✗ FAIL: Signature verification failed\x1b[0m\n");
+                return Err("Signature verification failed".into());
+            }
+        }
+        
+        Ok(())
+    }
+
 }
