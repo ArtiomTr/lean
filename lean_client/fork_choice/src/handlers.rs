@@ -181,6 +181,10 @@ fn process_block_internal(
         signature: proposer_signature,
     };
 
+    // Process proposer attestation as if received via gossip (is_from_block=false)
+    // This ensures it goes to "new" attestations and doesn't immediately affect fork choice
+    on_attestation(store, proposer_signed_attestation, false)?;
+
     Ok(())
 }
 

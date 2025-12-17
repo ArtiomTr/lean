@@ -6,8 +6,8 @@ resolver = "2"
 version = "0.1.0"
 edition = "2024"
 authors = ["TODO"]
-
 license = "MIT OR Apache-2.0"
+
 [workspace.dependencies]
 chain = { path = "./chain" }
 containers = { path = "./containers" }
