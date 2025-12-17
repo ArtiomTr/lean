@@ -1,16 +1,20 @@
-// DEVNET 0 validator clientas
+// Lean validator client with XMSS signing support
 use std::collections::HashMap;
 use std::path::Path;
 
 use containers::{
-    attestation::{Attestation, AttestationData, BlockSignatures, Signature, SignedAttestation},
-    block::{BlockWithAttestation, SignedBlockWithAttestation},
+    attestation::{Attestation, AttestationData, Signature, SignedAttestation},
+    block::{BlockWithAttestation, SignedBlockWithAttestation, hash_tree_root},
     checkpoint::Checkpoint,
     types::{Uint64, ValidatorIndex},
     Slot,
 };
 use fork_choice::store::{get_proposal_head, get_vote_target, Store};
 use tracing::{info, warn};
+
+pub mod keys;
+
+use keys::KeyManager;
 
 pub type ValidatorRegistry = HashMap<String, Vec<u64>>;
 // Node
@@ -50,6 +54,7 @@ impl ValidatorConfig {
 pub struct ValidatorService {
     pub config: ValidatorConfig,
     pub num_validators: u64,
+    key_manager: Option<KeyManager>,
 }
 
 impl ValidatorService {
@@ -63,7 +68,35 @@ impl ValidatorService {
         Self {
             config,
             num_validators,
+            key_manager: None,
         }
+    }
+
+    pub fn new_with_keys(
+        config: ValidatorConfig,
+        num_validators: u64,
+        keys_dir: impl AsRef<Path>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut key_manager = KeyManager::new(keys_dir)?;
+
+        // Load keys for all assigned validators
+        for &idx in &config.validator_indices {
+            key_manager.load_key(idx)?;
+        }
+
+        info!(
+            node_id = %config.node_id,
+            indices = ?config.validator_indices,
+            total_validators = num_validators,
+            keys_loaded = config.validator_indices.len(),
+            "VALIDATOR INITIALIZED WITH XMSS KEYS"
+        );
+
+        Ok(Self {
+            config,
+            num_validators,
+            key_manager: Some(key_manager),
+        })
     }
 
     pub fn get_proposer_for_slot(&self, slot: Slot) -> Option<ValidatorIndex> {
@@ -80,7 +113,6 @@ impl ValidatorService {
     }
 
     /// Build a block proposal for the given slot
-    /// Uses ZERO signatures for Devnet 0
     pub fn build_block_proposal(
         &self,
         store: &mut Store,
@@ -101,6 +133,14 @@ impl ValidatorService {
 
         let vote_target = get_vote_target(store);
 
+        // Validate that target slot is strictly greater than source slot
+        if vote_target.slot <= store.latest_justified.slot {
+            return Err(format!(
+                "Invalid attestation: target slot {} must be greater than source slot {}",
+                vote_target.slot.0, store.latest_justified.slot.0
+            ));
+        }
+
         let head_block = store
             .blocks
             .get(&store.head)
@@ -120,33 +160,110 @@ impl ValidatorService {
             },
         };
 
-        // STATELESS BUILD?
-        let (block, _post_state, _collected_atts, _sigs) =
-            parent_state.build_block(slot, proposer_index, parent_root, None, None, None)?;
+        // Collect valid attestations from the NEW attestations pool (gossip attestations
+        // that haven't been included in any block yet).
+        // Do NOT use latest_known_attestations - those have already been included in blocks!
+        // Filter to only include attestations that:
+        // 1. Have source matching the parent state's justified checkpoint
+        // 2. Have target slot > source slot (valid attestations)
+        // 3. Target block must be known
+        // Also collect the corresponding signatures
+        let valid_signed_attestations: Vec<&SignedAttestation> = store
+            .latest_new_attestations
+            .values()
+            .filter(|att| {
+                let data = &att.message.data;
+                // Source must match the parent state's justified checkpoint (not store's!)
+                let source_matches = data.source == parent_state.latest_justified;
+                // Target must be strictly after source
+                let target_after_source = data.target.slot > data.source.slot;
+                // Target block must be known
+                let target_known = store.blocks.contains_key(&data.target.root);
+                
+                source_matches && target_after_source && target_known
+            })
+            .collect();
+
+        let valid_attestations: Vec<Attestation> = valid_signed_attestations
+            .iter()
+            .map(|att| att.message.clone())
+            .collect();
+
+        info!(
+            slot = slot.0,
+            valid_attestations = valid_attestations.len(),
+            total_new = store.latest_new_attestations.len(),
+            "Collected new attestations for block"
+        );
+
+        // Build block with collected attestations (empty body - attestations go to state)
+        let (block, _post_state, _collected_atts, sigs) =
+            parent_state.build_block(slot, proposer_index, parent_root, Some(valid_attestations), None, None)?;
+
+        // Collect signatures from the attestations we included
+        let mut signatures = sigs;
+        for signed_att in &valid_signed_attestations {
+            signatures.push(signed_att.signature.clone())
+                .map_err(|e| format!("Failed to add attestation signature: {:?}", e))?;
+        }
 
         info!(
             slot = block.slot.0,
             proposer = block.proposer_index.0,
             parent_root = %format!("0x{:x}", block.parent_root.0),
             state_root = %format!("0x{:x}", block.state_root.0),
+            attestation_sigs = valid_signed_attestations.len(),
             "Block built successfully"
         );
+
+        // Sign the proposer attestation
+        if let Some(ref key_manager) = self.key_manager {
+            // Sign proposer attestation with XMSS
+            let message = hash_tree_root(&proposer_attestation);
+            let epoch = slot.0 as u32;
+
+            match key_manager.sign(proposer_index.0, epoch, &message.0.into()) {
+                Ok(sig) => {
+                    signatures.push(sig).map_err(|e| format!("Failed to add proposer signature: {:?}", e))?;
+                    info!(
+                        proposer = proposer_index.0,
+                        "Signed proposer attestation"
+                    );
+                }
+                Err(e) => {
+                    return Err(format!("Failed to sign proposer attestation: {}", e));
+                }
+            }
+        } else {
+            // No key manager - use zero signature
+            warn!("Building block with zero signature (no key manager)");
+        }
 
         let signed_block = SignedBlockWithAttestation {
             message: BlockWithAttestation {
                 block,
                 proposer_attestation,
             },
-            signature: BlockSignatures::default(),
+            signature: signatures,
         };
 
         Ok(signed_block)
     }
 
     /// Create attestations for all our validators for the given slot
-    /// Uses ZERO signatures for Devnet 0
     pub fn create_attestations(&self, store: &Store, slot: Slot) -> Vec<SignedAttestation> {
         let vote_target = get_vote_target(store);
+
+        // Skip attestation creation if target slot is not strictly greater than source slot
+        // This prevents creating invalid attestations when the node's view is behind
+        if vote_target.slot <= store.latest_justified.slot {
+            warn!(
+                target_slot = vote_target.slot.0,
+                source_slot = store.latest_justified.slot.0,
+                "Skipping attestation: target slot must be greater than source slot"
+            );
+            return vec![];
+        }
 
         let get_head_block_info = match store.blocks.get(&store.head) {
             Some(b) => b,
@@ -166,7 +283,7 @@ impl ValidatorService {
         self.config
             .validator_indices
             .iter()
-            .map(|&idx| {
+            .filter_map(|&idx| {
                 let attestation = Attestation {
                     validator_id: Uint64(idx),
                     data: AttestationData {
@@ -177,19 +294,47 @@ impl ValidatorService {
                     },
                 };
 
-                info!(
-                    slot = slot.0,
-                    validator = idx,
-                    target_slot = vote_target.slot.0,
-                    source_slot = store.latest_justified.slot.0,
-                    "Created attestation"
-                );
+                let signature = if let Some(ref key_manager) = self.key_manager {
+                    // Sign with XMSS
+                    let message = hash_tree_root(&attestation);
+                    let epoch = slot.0 as u32;
 
-                // Devnet 0 with 0 signature
-                SignedAttestation {
+                    match key_manager.sign(idx, epoch, &message.0.into()) {
+                        Ok(sig) => {
+                            info!(
+                                slot = slot.0,
+                                validator = idx,
+                                target_slot = vote_target.slot.0,
+                                source_slot = store.latest_justified.slot.0,
+                                "Created signed attestation"
+                            );
+                            sig
+                        }
+                        Err(e) => {
+                            warn!(
+                                validator = idx,
+                                error = %e,
+                                "Failed to sign attestation, skipping"
+                            );
+                            return None;
+                        }
+                    }
+                } else {
+                    // No key manager - use zero signature
+                    info!(
+                        slot = slot.0,
+                        validator = idx,
+                        target_slot = vote_target.slot.0,
+                        source_slot = store.latest_justified.slot.0,
+                        "Created attestation with zero signature"
+                    );
+                    Signature::default()
+                };
+
+                Some(SignedAttestation {
                     message: attestation,
-                    signature: Signature::default(),
-                }
+                    signature,
+                })
             })
             .collect()
     }

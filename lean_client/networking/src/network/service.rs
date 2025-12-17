@@ -21,7 +21,7 @@ use libp2p_identity::{Keypair, PeerId};
 use parking_lot::Mutex;
 use tokio::select;
 use tokio::time::{Duration, MissedTickBehavior, interval};
-use tracing::{info, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 use crate::{
     bootnodes::{BootnodeSource, StaticBootnodes},
@@ -337,8 +337,82 @@ where
         None
     }
 
-    fn handle_request_response_event(&mut self, _event: ReqRespMessage) -> Option<NetworkEvent> {
-        info!(?_event, "RequestResponse event");
+    fn handle_request_response_event(&mut self, event: ReqRespMessage) -> Option<NetworkEvent> {
+        use libp2p::request_response::{Event, Message};
+        use crate::req_resp::LeanResponse;
+
+        match event {
+            Event::Message { peer, message, .. } => match message {
+                Message::Response { response, .. } => {
+                    match response {
+                        LeanResponse::BlocksByRoot(blocks) => {
+                            info!(
+                                peer = %peer,
+                                num_blocks = blocks.len(),
+                                "Received BlocksByRoot response"
+                            );
+
+                            // Feed received blocks back into chain processing
+                            let chain_sink = self.chain_message_sink.clone();
+                            tokio::spawn(async move {
+                                for block in blocks {
+                                    let slot = block.message.block.slot.0;
+                                    if let Err(e) = chain_sink.send(
+                                        ChainMessage::ProcessBlock {
+                                            signed_block_with_attestation: block,
+                                            is_trusted: false,
+                                            should_gossip: false, // Don't re-gossip requested blocks
+                                        }
+                                    ).await {
+                                        warn!(slot = slot, ?e, "Failed to send requested block to chain");
+                                    } else {
+                                        debug!(slot = slot, "Queued requested block for processing");
+                                    }
+                                }
+                            });
+                        }
+                        LeanResponse::Status(_) => {
+                            info!(peer = %peer, "Received Status response");
+                        }
+                        LeanResponse::Empty => {
+                            warn!(peer = %peer, "Received empty response");
+                        }
+                    }
+                }
+                Message::Request { request, channel, .. } => {
+                    use crate::req_resp::{LeanRequest, LeanResponse};
+
+                    let response = match request {
+                        LeanRequest::Status(_) => {
+                            info!(peer = %peer, "Received Status request");
+                            LeanResponse::Status(containers::Status::default())
+                        }
+                        LeanRequest::BlocksByRoot(roots) => {
+                            info!(peer = %peer, num_roots = roots.len(), "Received BlocksByRoot request");
+                            // TODO: Lookup blocks from our store and return them
+                            // For now, return empty to prevent timeout
+                            LeanResponse::BlocksByRoot(vec![])
+                        }
+                    };
+
+                    if let Err(e) = self.swarm
+                        .behaviour_mut()
+                        .req_resp
+                        .send_response(channel, response) {
+                        warn!(peer = %peer, ?e, "Failed to send response");
+                    }
+                }
+            },
+            Event::OutboundFailure { peer, error, .. } => {
+                warn!(peer = %peer, ?error, "Request failed");
+            }
+            Event::InboundFailure { peer, error, .. } => {
+                warn!(peer = %peer, ?error, "Inbound request failed");
+            }
+            Event::ResponseSent { peer, .. } => {
+                trace!(peer = %peer, "Response sent");
+            }
+        }
         None
     }
 
@@ -412,6 +486,23 @@ where
         }
     }
 
+    fn get_random_connected_peer(&self) -> Option<PeerId> {
+        let peers: Vec<PeerId> = self
+            .peer_table
+            .lock()
+            .iter()
+            .filter(|(_, state)| **state == ConnectionState::Connected)
+            .map(|(peer_id, _)| *peer_id)
+            .collect();
+
+        if peers.is_empty() {
+            None
+        } else {
+            use rand::seq::SliceRandom;
+            peers.choose(&mut rand::thread_rng()).copied()
+        }
+    }
+
     async fn dispatch_outbound_request(&mut self, request: OutboundP2pRequest) {
         match request {
             OutboundP2pRequest::GossipBlockWithAttestation(signed_block_with_attestation) => {
@@ -442,6 +533,18 @@ where
                     Err(err) => {
                         warn!(slot = slot, ?err, "Serialize attestation failed");
                     }
+                }
+            }
+            OutboundP2pRequest::RequestBlocksByRoot(roots) => {
+                if let Some(peer_id) = self.get_random_connected_peer() {
+                    info!(
+                        peer = %peer_id,
+                        num_blocks = roots.len(),
+                        "Requesting missing blocks from peer"
+                    );
+                    self.send_blocks_by_root_request(peer_id, roots);
+                } else {
+                    warn!("Cannot request blocks: no connected peers");
                 }
             }
         }

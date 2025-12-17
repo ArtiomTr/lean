@@ -146,9 +146,9 @@ fn test_interval_calculations() {
     let slot_number = total_intervals / INTERVALS_PER_SLOT;
     let interval_in_slot = total_intervals % INTERVALS_PER_SLOT;
 
-    // INTERVALS_PER_SLOT is 8 (from store.rs)
-    // 10 intervals = 1 slot (8 intervals) + 2 intervals
-    assert_eq!(slot_number, 1);
+    // INTERVALS_PER_SLOT is 4 (from store.rs)
+    // 10 intervals = 2 slots (8 intervals) + 2 intervals
+    assert_eq!(slot_number, 2);
     assert_eq!(interval_in_slot, 2);
 
     // Test boundary cases

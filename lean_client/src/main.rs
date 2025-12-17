@@ -52,13 +52,18 @@ fn count_validators(state: &State) -> u64 {
 
 fn print_chain_status(store: &Store, connected_peers: u64) {
     let current_slot = store.time / INTERVALS_PER_SLOT;
-    let next_slot = current_slot + 1;
 
     let head_slot = store
         .blocks
         .get(&store.head)
         .map(|b| b.message.block.slot.0)
         .unwrap_or(0);
+
+    let behind = if current_slot > head_slot {
+        current_slot - head_slot
+    } else {
+        0
+    };
 
     let (head_root, parent_root, state_root) = if let Some(block) = store.blocks.get(&store.head) {
         let head_root = store.head;
@@ -73,33 +78,34 @@ fn print_chain_status(store: &Store, connected_peers: u64) {
         )
     };
 
-    let (justified, finalized) = if let Some(state) = store.states.get(&store.head) {
-        (&state.latest_justified, &state.latest_finalized)
-    } else {
-        (&store.latest_justified, &store.latest_finalized)
-    };
+    // Read from store's checkpoints (updated by on_block, reflects highest seen)
+    let justified = store.latest_justified.clone();
+    let finalized = store.latest_finalized.clone();
 
-    println!("\n============================================================");
+    let timely = behind == 0;
+
+    println!("\n+===============================================================+");
     println!(
-        "LEAN CHAIN STATUS: Next Slot: {} | Head Slot: {}",
-        next_slot, head_slot
+        "  CHAIN STATUS: Current Slot: {} | Head Slot: {} | Behind: {}",
+        current_slot, head_slot, behind
     );
-    println!("------------------------------------------------------------");
-    println!("Connected Peers:   {}", connected_peers);
-    println!("------------------------------------------------------------");
-    println!("Head Block Root:   0x{:x}", head_root.0);
-    println!("Parent Block Root: 0x{:x}", parent_root.0);
-    println!("State Root:        0x{:x}", state_root.0);
-    println!("------------------------------------------------------------");
+    println!("+---------------------------------------------------------------+");
+    println!("  Connected Peers:    {}", connected_peers);
+    println!("+---------------------------------------------------------------+");
+    println!("  Head Block Root:    0x{:x}", head_root.0);
+    println!("  Parent Block Root:  0x{:x}", parent_root.0);
+    println!("  State Root:         0x{:x}", state_root.0);
+    println!("  Timely:             {}", if timely { "YES" } else { "NO" });
+    println!("+---------------------------------------------------------------+");
     println!(
-        "Latest Justified:  Slot {} | Root: 0x{:x}",
+        "  Latest Justified:   Slot {:>5} | Root: 0x{:x}",
         justified.slot.0, justified.root.0
     );
     println!(
-        "Latest Finalized:  Slot {} | Root: 0x{:x}",
+        "  Latest Finalized:   Slot {:>5} | Root: 0x{:x}",
         finalized.slot.0, finalized.root.0
     );
-    println!("============================================================\n");
+    println!("+===============================================================+\n");
 }
 
 #[derive(Parser, Debug)]
@@ -126,6 +132,10 @@ struct Args {
     /// Path: p2p private key
     #[arg(long)]
     node_key: Option<String>,
+
+    /// Path: directory containing XMSS validator keys (validator_N_sk.ssz files)
+    #[arg(long)]
+    hash_sig_key_dir: Option<String>,
 }
 
 #[tokio::main]
@@ -141,7 +151,7 @@ async fn main() {
     let (chain_message_sender, mut chain_message_receiver) =
         mpsc::unbounded_channel::<ChainMessage>();
 
-    let (genesis_time, validators) = if let Some(genesis_path) = args.genesis {
+    let (genesis_time, validators) = if let Some(genesis_path) = &args.genesis {
         let genesis_config = containers::GenesisConfig::load_from_file(genesis_path)
             .expect("Failed to load genesis config");
 
@@ -220,12 +230,40 @@ async fn main() {
     {
         match ValidatorConfig::load_from_file(registry_path, node_id) {
             Ok(config) => {
-                info!(
-                    node_id = %node_id,
-                    indices = ?config.validator_indices,
-                    "Validator mode enabled"
-                );
-                Some(ValidatorService::new(config, num_validators))
+                // Use explicit hash-sig-key-dir if provided
+                if let Some(ref keys_dir) = args.hash_sig_key_dir {
+                    let keys_path = std::path::Path::new(keys_dir);
+                    if keys_path.exists() {
+                        match ValidatorService::new_with_keys(config.clone(), num_validators, keys_path) {
+                            Ok(service) => {
+                                info!(
+                                    node_id = %node_id,
+                                    indices = ?config.validator_indices,
+                                    keys_dir = ?keys_path,
+                                    "Validator mode enabled with XMSS signing"
+                                );
+                                Some(service)
+                            }
+                            Err(e) => {
+                                warn!("Failed to load XMSS keys: {}, falling back to zero signatures", e);
+                                Some(ValidatorService::new(config, num_validators))
+                            }
+                        }
+                    } else {
+                        warn!(
+                            "Hash-sig key directory not found: {:?}, using zero signatures",
+                            keys_path
+                        );
+                        Some(ValidatorService::new(config, num_validators))
+                    }
+                } else {
+                    info!(
+                        node_id = %node_id,
+                        indices = ?config.validator_indices,
+                        "Validator mode enabled (no --hash-sig-key-dir specified - using zero signatures)"
+                    );
+                    Some(ValidatorService::new(config, num_validators))
+                }
             }
             Err(e) => {
                 warn!("Failed to load validator config: {}", e);
@@ -303,7 +341,6 @@ async fn main() {
         let mut tick_interval = interval(Duration::from_millis(1000));
         let mut last_logged_slot = 0u64;
         let mut last_status_slot: Option<u64> = None;
-        let mut tick_count: u64 = 0;
         let mut last_proposal_slot: Option<u64> = None;
         let mut last_attestation_slot: Option<u64> = None;
 
@@ -348,6 +385,13 @@ async fn main() {
                                                     "Built block, processing and gossiping"
                                                 );
 
+                                                // Synchronize store time with wall clock before processing own block
+                                                let now = SystemTime::now()
+                                                    .duration_since(UNIX_EPOCH)
+                                                    .unwrap()
+                                                    .as_secs();
+                                                on_tick(&mut store, now, false);
+
                                                 match on_block(&mut store, signed_block.clone()) {
                                                     Ok(()) => {
                                                         info!("Own block processed successfully");
@@ -381,7 +425,7 @@ async fn main() {
                                         );
 
 
-                                        match on_attestation(&mut store, signed_att.message.clone(), false) {
+                                        match on_attestation(&mut store, signed_att.clone(), false) {
                                             Ok(()) => {
                                                 if let Err(e) = chain_outbound_sender.send(
                                                     OutboundP2pRequest::GossipAttestation(signed_att)
@@ -397,15 +441,13 @@ async fn main() {
                             }
                         }
                         2 => {
-                            info!(slot = current_slot, tick = tick_count, "Computing safe target");
+                            info!(slot = current_slot, tick = store.time, "Computing safe target");
                         }
                         3 => {
-                            info!(slot = current_slot, tick = tick_count, "Accepting new attestations");
+                            info!(slot = current_slot, tick = store.time, "Accepting new attestations");
                         }
                         _ => {}
                     }
-
-                    tick_count += 1;
 
                     if current_slot != last_logged_slot && current_slot % 10 == 0 {
                         debug!("(Okay)Store time updated : slot {}, pending blocks: {}",
@@ -426,12 +468,21 @@ async fn main() {
                             let block_slot = signed_block_with_attestation.message.block.slot.0;
                             let proposer = signed_block_with_attestation.message.block.proposer_index.0;
                             let block_root = Bytes32(signed_block_with_attestation.message.block.hash_tree_root());
+                            let parent_root = signed_block_with_attestation.message.block.parent_root;
+
                             info!(
                                 slot = block_slot,
                                 block_root = %format!("0x{:x}", block_root.0),
                                 "Processing block built by Validator {}",
                                 proposer
                             );
+
+                            // Synchronize store time with wall clock before processing block
+                            let now = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap()
+                                .as_secs();
+                            on_tick(&mut store, now, false);
 
                             match on_block(&mut store, signed_block_with_attestation.clone()) {
                                 Ok(()) => {
@@ -447,8 +498,19 @@ async fn main() {
                                         }
                                     }
                                 }
-                                Err(e) if e.starts_with("Problem processing block. Block queued") => {
-                                    info!("{}", e);
+                                Err(e) if e.starts_with("Err: (Fork-choice::Handlers::OnBlock) Block queued") => {
+                                    debug!("Block queued, requesting missing parent: {}", e);
+
+                                    // Request missing parent block from peers
+                                    if !parent_root.0.is_zero() {
+                                        if let Err(req_err) = outbound_p2p_sender.send(
+                                            OutboundP2pRequest::RequestBlocksByRoot(vec![parent_root])
+                                        ) {
+                                            warn!("Failed to request missing parent block: {}", req_err);
+                                        } else {
+                                            debug!("Requested missing parent block: 0x{:x}", parent_root.0);
+                                        }
+                                    }
                                 }
                                 Err(e) => warn!("Problem processing block: {}", e),
                             }
@@ -470,7 +532,7 @@ async fn main() {
                                 validator_id
                             );
 
-                            match on_attestation(&mut store, signed_attestation.message.clone(), false) {
+                            match on_attestation(&mut store, signed_attestation.clone(), false) {
                                 Ok(()) => {
                                     if should_gossip {
                                         if let Err(e) = outbound_p2p_sender.send(

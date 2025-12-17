@@ -1,4 +1,5 @@
 use containers::{
+    attestation::SignedAttestation,
     block::SignedBlockWithAttestation, checkpoint::Checkpoint, config::Config, state::State,
     Bytes32, Root, Slot, ValidatorIndex,
 };
@@ -7,6 +8,7 @@ use std::collections::HashMap;
 pub type Interval = u64;
 pub const INTERVALS_PER_SLOT: Interval = 4;
 pub const SECONDS_PER_SLOT: u64 = 4;
+pub const SECONDS_PER_INTERVAL: u64 = SECONDS_PER_SLOT / INTERVALS_PER_SLOT;
 
 #[derive(Debug, Clone, Default)]
 pub struct Store {
@@ -18,8 +20,8 @@ pub struct Store {
     pub latest_finalized: Checkpoint,
     pub blocks: HashMap<Root, SignedBlockWithAttestation>,
     pub states: HashMap<Root, State>,
-    pub latest_known_votes: HashMap<ValidatorIndex, Checkpoint>,
-    pub latest_new_votes: HashMap<ValidatorIndex, Checkpoint>,
+    pub latest_known_attestations: HashMap<ValidatorIndex, SignedAttestation>,
+    pub latest_new_attestations: HashMap<ValidatorIndex, SignedAttestation>,
     pub blocks_queue: HashMap<Root, Vec<SignedBlockWithAttestation>>,
 }
 
@@ -58,8 +60,8 @@ pub fn get_forkchoice_store(
         latest_finalized,
         blocks: [(block_root, anchor_block)].into(),
         states: [(block_root, anchor_state)].into(),
-        latest_known_votes: HashMap::new(),
-        latest_new_votes: HashMap::new(),
+        latest_known_attestations: HashMap::new(),
+        latest_new_attestations: HashMap::new(),
         blocks_queue: HashMap::new(),
     }
 }
@@ -67,7 +69,7 @@ pub fn get_forkchoice_store(
 pub fn get_fork_choice_head(
     store: &Store,
     mut root: Root,
-    latest_votes: &HashMap<ValidatorIndex, Checkpoint>,
+    latest_attestations: &HashMap<ValidatorIndex, SignedAttestation>,
     min_votes: usize,
 ) -> Root {
     if root.0.is_zero() {
@@ -81,11 +83,11 @@ pub fn get_fork_choice_head(
     let mut vote_weights: HashMap<Root, usize> = HashMap::new();
     let root_slot = store.blocks[&root].message.block.slot;
 
-    // stage 1
-    for v in latest_votes.values() {
-        if let Some(block) = store.blocks.get(&v.root) {
-            let mut curr = v.root;
+    // stage 1: accumulate weights by walking up from each attestation's head
+    for attestation in latest_attestations.values() {
+        let mut curr = attestation.message.data.head.root;
 
+        if let Some(block) = store.blocks.get(&curr) {
             let mut curr_slot = block.message.block.slot;
 
             while curr_slot > root_slot {
@@ -121,7 +123,7 @@ pub fn get_fork_choice_head(
         }
     }
 
-    // stage 3
+    // stage 3: greedy walk choosing heaviest child at each fork
     let mut curr = root;
     loop {
         let children = match child_map.get(&curr) {
@@ -129,16 +131,14 @@ pub fn get_fork_choice_head(
             _ => return curr,
         };
 
+        // Choose best child: most attestations, then lexicographically highest hash
+        // This matches leanSpec: max(children, key=lambda x: (weights[x], x))
         curr = *children
             .iter()
             .max_by(|&&a, &&b| {
                 let wa = vote_weights.get(&a).copied().unwrap_or(0);
                 let wb = vote_weights.get(&b).copied().unwrap_or(0);
-                let slot_a = store.blocks[&a].message.block.slot;
-                let slot_b = store.blocks[&b].message.block.slot;
-                wa.cmp(&wb)
-                    .then_with(|| slot_b.cmp(&slot_a))
-                    .then_with(|| a.cmp(&b))
+                wa.cmp(&wb).then_with(|| a.cmp(&b))
             })
             .unwrap();
     }
@@ -152,25 +152,14 @@ pub fn get_latest_justified(states: &HashMap<Root, State>) -> Option<&Checkpoint
 }
 
 pub fn update_head(store: &mut Store) {
-    if let Some(latest_justified) = get_latest_justified(&store.states) {
-        if latest_justified.slot > store.latest_justified.slot {
-            store.latest_justified = latest_justified.clone();
-        }
-    }
-
+    // Compute new head using LMD-GHOST from latest justified root
     let new_head = get_fork_choice_head(
         store,
         store.latest_justified.root,
-        &store.latest_known_votes,
+        &store.latest_known_attestations,
         0,
     );
     store.head = new_head;
-
-    if let Some(state) = store.states.get(&store.head) {
-        if state.latest_finalized.slot > store.latest_finalized.slot {
-            store.latest_finalized = state.latest_finalized.clone();
-        }
-    }
 }
 
 pub fn update_safe_target(store: &mut Store) {
@@ -193,24 +182,25 @@ pub fn update_safe_target(store: &mut Store) {
 
     let min_score = (n_validators * 2 + 2) / 3;
     let root = store.latest_justified.root;
-    store.safe_target = get_fork_choice_head(store, root, &store.latest_new_votes, min_score);
+    store.safe_target = get_fork_choice_head(store, root, &store.latest_new_attestations, min_score);
 }
 
-pub fn accept_new_votes(store: &mut Store) {
+pub fn accept_new_attestations(store: &mut Store) {
     store
-        .latest_known_votes
-        .extend(store.latest_new_votes.drain());
+        .latest_known_attestations
+        .extend(store.latest_new_attestations.drain());
     update_head(store);
 }
 
 pub fn tick_interval(store: &mut Store, has_proposal: bool) {
     store.time += 1;
-    let curr_interval = store.time % INTERVALS_PER_SLOT;
+    // Calculate current interval within slot: time % SECONDS_PER_SLOT % INTERVALS_PER_SLOT
+    let curr_interval = (store.time % SECONDS_PER_SLOT) % INTERVALS_PER_SLOT;
 
     match curr_interval {
-        0 if has_proposal => accept_new_votes(store),
+        0 if has_proposal => accept_new_attestations(store),
         2 => update_safe_target(store),
-        _ if curr_interval != 1 => accept_new_votes(store),
+        3 => accept_new_attestations(store),
         _ => {}
     }
 }
@@ -218,10 +208,19 @@ pub fn tick_interval(store: &mut Store, has_proposal: bool) {
 pub fn get_vote_target(store: &Store) -> Checkpoint {
     let mut target = store.head;
     let safe_slot = store.blocks[&store.safe_target].message.block.slot;
+    let source_slot = store.latest_justified.slot;
 
+    // Walk back toward safe target (up to 3 steps per leanSpec JUSTIFICATION_LOOKBACK_SLOTS)
     for _ in 0..3 {
         if store.blocks[&target].message.block.slot > safe_slot {
-            target = store.blocks[&target].message.block.parent_root;
+            let parent = store.blocks[&target].message.block.parent_root;
+            // Don't walk back if it would make target <= source (invalid attestation)
+            if let Some(parent_block) = store.blocks.get(&parent) {
+                if parent_block.message.block.slot <= source_slot {
+                    break;
+                }
+            }
+            target = parent;
         } else {
             break;
         }
@@ -234,7 +233,14 @@ pub fn get_vote_target(store: &Store) -> Checkpoint {
         .slot
         .is_justifiable_after(final_slot)
     {
-        target = store.blocks[&target].message.block.parent_root;
+        let parent = store.blocks[&target].message.block.parent_root;
+        // Don't walk back if it would make target <= source (invalid attestation)
+        if let Some(parent_block) = store.blocks.get(&parent) {
+            if parent_block.message.block.slot <= source_slot {
+                break;
+            }
+        }
+        target = parent;
     }
 
     let block_target = &store.blocks[&target].message.block;
@@ -249,6 +255,6 @@ pub fn get_proposal_head(store: &mut Store, slot: Slot) -> Root {
     let slot_time = store.config.genesis_time + (slot.0 * SECONDS_PER_SLOT);
 
     crate::handlers::on_tick(store, slot_time, true);
-    accept_new_votes(store);
+    accept_new_attestations(store);
     store.head
 }

@@ -3,9 +3,15 @@ name = "validator"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["xmss-signing"]
+xmss-signing = ["leansig"]
+
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 containers = { path = "../containers" }
 fork-choice = { path = "../fork_choice" }
 tracing = "0.1"
+typenum = "1.17"
+leansig = { git = "https://github.com/leanEthereum/leanSig", branch = "main", optional = true }

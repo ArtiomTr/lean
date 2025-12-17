@@ -1,50 +1,79 @@
 use crate::store::*;
 use containers::{
-    attestation::Attestation, block::SignedBlockWithAttestation, Bytes32, ValidatorIndex,
+    attestation::SignedAttestation,
+    block::SignedBlockWithAttestation,
+    Bytes32, ValidatorIndex,
 };
 use ssz::SszHash;
 
 #[inline]
-pub fn on_tick(store: &mut Store, time: u64, _has_proposal: bool) {
-    let elapsed_intervals =
-        time.saturating_sub(store.config.genesis_time) * INTERVALS_PER_SLOT / SECONDS_PER_SLOT;
-    if store.time < elapsed_intervals {
-        store.time = elapsed_intervals;
+pub fn on_tick(store: &mut Store, time: u64, has_proposal: bool) {
+    // Calculate target time in intervals
+    let tick_interval_time =
+        time.saturating_sub(store.config.genesis_time) / SECONDS_PER_INTERVAL;
+
+    // Tick forward one interval at a time
+    while store.time < tick_interval_time {
+        // Check if proposal should be signaled for next interval
+        let should_signal_proposal = has_proposal && (store.time + 1) == tick_interval_time;
+
+        // Advance by one interval with appropriate signaling
+        tick_interval(store, should_signal_proposal);
     }
 }
 
 #[inline]
 pub fn on_attestation(
     store: &mut Store,
-    attestation: Attestation,
+    signed_attestation: SignedAttestation,
     is_from_block: bool,
 ) -> Result<(), String> {
-    let key_vald = ValidatorIndex(attestation.validator_id.0);
-    let vote = attestation.data.target;
+    let validator_id = ValidatorIndex(signed_attestation.message.validator_id.0);
+    let attestation_slot = signed_attestation.message.data.slot;
+    let source_slot = signed_attestation.message.data.source.slot;
+    let target_slot = signed_attestation.message.data.target.slot;
 
+    // Validate attestation is not from future
     let curr_slot = store.time / INTERVALS_PER_SLOT;
-    if vote.slot.0 > curr_slot {
+    if attestation_slot.0 > curr_slot {
         return Err(format!(
-            "Err: (Fork-choice::Handlers::OnAttestation) Attestation for slot {} has not yet occured, out of sync. (CURRENT SLOT NUMBER: {})",
-            vote.slot.0, curr_slot
+            "Err: (Fork-choice::Handlers::OnAttestation) Attestation for slot {} has not yet occurred, out of sync. (CURRENT SLOT NUMBER: {})",
+            attestation_slot.0, curr_slot
+        ));
+    }
+
+    // Validate source slot does not exceed target slot (per leanSpec validate_attestation)
+    if source_slot > target_slot {
+        return Err(format!(
+            "Err: (Fork-choice::Handlers::OnAttestation) Source slot {} exceeds target slot {}",
+            source_slot.0, target_slot.0
         ));
     }
 
     if is_from_block {
+        // On-chain attestation processing - immediately becomes "known"
         if store
-            .latest_known_votes
-            .get(&key_vald)
-            .map_or(true, |v| v.slot < vote.slot)
+            .latest_known_attestations
+            .get(&validator_id)
+            .map_or(true, |existing| existing.message.data.slot < attestation_slot)
         {
-            store.latest_known_votes.insert(key_vald, vote);
+            store.latest_known_attestations.insert(validator_id, signed_attestation.clone());
+        }
+
+        // Remove from new attestations if superseded
+        if let Some(existing_new) = store.latest_new_attestations.get(&validator_id) {
+            if existing_new.message.data.slot <= attestation_slot {
+                store.latest_new_attestations.remove(&validator_id);
+            }
         }
     } else {
+        // Network gossip attestation processing - goes to "new" stage
         if store
-            .latest_new_votes
-            .get(&key_vald)
-            .map_or(true, |v| v.slot < vote.slot)
+            .latest_new_attestations
+            .get(&validator_id)
+            .map_or(true, |existing| existing.message.data.slot < attestation_slot)
         {
-            store.latest_new_votes.insert(key_vald, vote);
+            store.latest_new_attestations.insert(validator_id, signed_attestation);
         }
     }
     Ok(())
@@ -85,70 +114,73 @@ fn process_block_internal(
 ) -> Result<(), String> {
     let block = &signed_block.message.block;
 
-    let block_time = block.slot.0 * INTERVALS_PER_SLOT;
-    if store.time < block_time {
-        store.time = block_time;
-    }
-
-    accept_new_votes(store);
-
-    let attest = &block.body.attestations;
-    for i in 0.. {
-        match attest.get(i) {
-            Ok(attest) => {
-                on_attestation(store, attest.clone(), true)?;
-            }
-            Err(_) => break,
-        }
-    }
-
-    on_attestation(
-        store,
-        signed_block.message.proposer_attestation.clone(),
-        true,
-    )?;
-
+    // Get parent state for validation
     let state = match store.states.get(&block.parent_root) {
         Some(state) => state,
         None => {
             return Err(
-                "Err: (Fork-choice::Handlers::ProcesBlockInternal)No parent state.".to_string(),
+                "Err: (Fork-choice::Handlers::ProcessBlockInternal) No parent state.".to_string(),
             );
         }
     };
 
-    let mut new_state =
-        state.state_transition_with_validation(signed_block.clone(), true, false)?;
+    // Execute state transition to get post-state
+    let new_state =
+        state.state_transition_with_validation(signed_block.clone(), true, true)?;
 
-    use containers::block::hash_tree_root as hash_root;
-    let body_root = hash_root(&block.body);
-    new_state.latest_block_header = containers::block::BlockHeader {
-        slot: block.slot,
-        proposer_index: block.proposer_index,
-        parent_root: block.parent_root,
-        state_root: block.state_root,
-        body_root,
-    };
-
+    // Store block and state
     store.blocks.insert(block_root, signed_block.clone());
-    store.states.insert(block_root, new_state);
+    store.states.insert(block_root, new_state.clone());
 
-    use containers::checkpoint::Checkpoint;
-    let proposer_vote = Checkpoint {
-        root: block_root,
-        slot: block.slot,
-    };
-    let proposer_idx = block.proposer_index;
-
-    if store
-        .latest_new_votes
-        .get(&proposer_idx)
-        .map_or(true, |v| v.slot < proposer_vote.slot)
-    {
-        store.latest_new_votes.insert(proposer_idx, proposer_vote);
+    if new_state.latest_justified.slot > store.latest_justified.slot {
+        store.latest_justified = new_state.latest_justified.clone();
+    }
+    if new_state.latest_finalized.slot > store.latest_finalized.slot {
+        store.latest_finalized = new_state.latest_finalized.clone();
     }
 
+    // Process block body attestations as on-chain (is_from_block=true)
+    let attestations = &signed_block.message.block.body.attestations;
+    let signatures = &signed_block.signature;
+
+    for i in 0.. {
+        match (attestations.get(i), signatures.get(i)) {
+            (Ok(attestation), Ok(signature)) => {
+                let signed_attestation = SignedAttestation {
+                    message: attestation.clone(),
+                    signature: signature.clone(),
+                };
+                on_attestation(store, signed_attestation, true)?;
+            }
+            _ => break,
+        }
+    }
+
+    // Update head BEFORE processing proposer attestation
     update_head(store);
+
+    // Process proposer attestation as gossip (is_from_block=false)
+    // This ensures it goes to "new" attestations and doesn't immediately affect fork choice
+    let num_body_attestations = {
+        let mut count = 0;
+        while attestations.get(count).is_ok() {
+            count += 1;
+        }
+        count
+    };
+
+    // Get proposer signature or use default if not present (for tests)
+    use containers::attestation::Signature;
+    let proposer_signature = signatures
+        .get(num_body_attestations)
+        .map(|sig| sig.clone())
+        .unwrap_or_else(|_| Signature::default());
+
+    let proposer_signed_attestation = SignedAttestation {
+        message: signed_block.message.proposer_attestation.clone(),
+        signature: proposer_signature,
+    };
+
     Ok(())
 }
 

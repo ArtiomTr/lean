@@ -46,6 +46,7 @@ pub struct AttestationData {
 
 /// Validator specific attestation wrapping shared attestation data.
 #[derive(Clone, Debug, PartialEq, Eq, Ssz, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Attestation {
     /// The index of the validator making the attestation.
     pub validator_id: Uint64,

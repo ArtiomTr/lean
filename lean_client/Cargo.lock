@@ -3222,6 +3222,7 @@ dependencies = [
  "libp2p-identity 0.2.12",
  "libp2p-mplex",
  "parking_lot",
+ "rand 0.8.5",
  "serde",
  "sha2 0.10.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "snap",
@@ -5340,9 +5341,11 @@ version = "0.1.0"
 dependencies = [
  "containers",
  "fork-choice",
+ "leansig",
  "serde",
  "serde_yaml",
  "tracing",
+ "typenum",
 ]
 
 [[package]]

@@ -16,6 +16,7 @@
             "args": [
                 "--genesis", "${workspaceFolder}/../lean-quickstart/local-devnet/genesis/config.yaml",
                 "--validator-registry-path", "${workspaceFolder}/../lean-quickstart/local-devnet/genesis/validators.yaml",
+                "--hash-sig-key-dir", "${workspaceFolder}/../lean-quickstart/local-devnet/genesis/hash-sig-keys",
                 "--node-id", "qlean_0",
                 "--node-key", "${workspaceFolder}/../lean-quickstart/local-devnet/genesis/qlean_0.key",
                 "--port", "9003",

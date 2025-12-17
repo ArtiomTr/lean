@@ -15,9 +15,9 @@ tests run by executing in lean_client folder following command:  cargo test --wo
    git clone https://github.com/blockblaz/lean-quickstart
    cd lean-quickstart
    ```
-2. Launch Zeam, Ream, Latern nodes (DEVNET 0):
+2. Launch Zeam, Ream, Latern nodes (DEVNET 1):
    ```bash
-   NETWORK_DIR=local-devnet ./spin-node.sh --node zeam_0,ream_0,lantern_0 --generateGenesis --metrics 
+   NETWORK_DIR=local-devnet ./spin-node.sh --tag=devnet1 --node zeam_0,ream_0,lantern_0 --generateGenesis --metrics 
    ```
 3. Launch the client:
    ```bash
@@ -25,11 +25,12 @@ tests run by executing in lean_client folder following command:  cargo test --wo
    cargo build --release
    ```
    
-   Run in debug mode via terminal
+   Run in debug mode via terminal (with XMSS signing):
    ```
    RUST_LOG=info ./target/release/lean_client \
                  --genesis ../lean-quickstart/local-devnet/genesis/config.yaml \
                  --validator-registry-path ../lean-quickstart/local-devnet/genesis/validators.yaml \
+                 --hash-sig-key-dir ../lean-quickstart/local-devnet/genesis/hash-sig-keys \
                  --node-id qlean_0 \
                  --node-key ../lean-quickstart/local-devnet/genesis/qlean_0.key \
                  --port 9003 \

@@ -51,6 +51,10 @@ name = "lean_client"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["xmss-signing"]
+xmss-signing = ["validator/xmss-signing"]
+
 [dependencies]
 chain = { path = "./chain" }
 containers = { path = "./containers" }
