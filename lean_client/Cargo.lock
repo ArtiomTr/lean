@@ -914,7 +914,8 @@ dependencies = [
  "env-config",
  "ethereum_ssz",
  "hex",
- "leansig",
+ "lean-multisig",
+ "leansig 0.1.0 (git+https://github.com/leanEthereum/leanSig?rev=73bedc26ed961b110df7ac2e234dc11361a4bf25)",
  "metrics",
  "pretty_assertions",
  "rstest",
@@ -1462,7 +1463,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.1",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1636,16 +1637,13 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 name = "fork-choice"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "containers",
+ "env-config",
  "metrics",
  "serde",
  "serde_json",
  "ssz",
- "ssz_derive",
- "ssz_rs",
- "tracing",
- "typenum",
+ "test-generator",
 ]
 
 [[package]]
@@ -2354,7 +2352,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ad4bb2b565bca0645f4d68c5c9af97fba094e9791da685bf83cb5f3ce74acf2"
 dependencies = [
  "equivalent",
- "hashbrown 0.16.0",
+ "hashbrown 0.16.1",
  "serde",
  "serde_core",
 ]
@@ -2507,7 +2505,7 @@ dependencies = [
  "containers",
  "fork-choice",
  "hex",
- "libp2p-identity 0.2.12",
+ "libp2p-identity 0.2.13",
  "metrics",
  "networking",
  "tokio",
@@ -3419,6 +3417,7 @@ dependencies = [
  "libp2p",
  "libp2p-identity 0.2.13",
  "libp2p-mplex",
+ "metrics",
  "parking_lot",
  "rand 0.8.5",
  "serde",
@@ -3465,7 +3464,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.1",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4246,7 +4245,7 @@ dependencies = [
  "memchr",
  "parking_lot",
  "protobuf",
- "thiserror 2.0.16",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -4806,7 +4805,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.1",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5424,7 +5423,19 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.61.1",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "test-generator"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b23be2add79223226e1cb6446cb3e37506a5927089870687a0f1149bb7a073a"
+dependencies = [
+ "glob",
+ "proc-macro2 0.4.30",
+ "quote 0.6.13",
+ "syn 0.15.44",
 ]
 
 [[package]]
@@ -5908,9 +5919,8 @@ dependencies = [
  "containers",
  "env-config",
  "fork-choice",
- "leansig",
+ "leansig 0.1.0 (git+https://github.com/leanEthereum/leanSig?branch=main)",
  "metrics",
- "serde",
  "serde_yaml",
  "tracing",
  "typenum",

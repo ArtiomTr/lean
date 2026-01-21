@@ -2,7 +2,9 @@ use std::{sync::Arc, time::SystemTime};
 
 use anyhow::{Context, Result};
 use once_cell::sync::OnceCell;
-use prometheus::{GaugeVec, Histogram, IntCounter, IntGauge, histogram_opts, opts};
+use prometheus::{
+    GaugeVec, Histogram, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, histogram_opts, opts,
+};
 
 pub static METRICS: OnceCell<Arc<Metrics>> = OnceCell::new();
 
@@ -53,13 +55,13 @@ pub struct Metrics {
     pub lean_fork_choice_block_processing_time_seconds: Histogram,
 
     /// Total number of valid attestations
-    lean_attestations_valid_total: IntCounter,
+    pub lean_attestations_valid_total: IntCounterVec,
 
     /// Total number of invalid attestations
-    lean_attestations_invalid_total: IntCounter,
+    pub lean_attestations_invalid_total: IntCounterVec,
 
     /// Time taken to validate attestation
-    lean_attestation_validation_time_seconds: Histogram,
+    pub lean_attestation_validation_time_seconds: Histogram,
 
     /// Total number of fork choice reorgs
     lean_fork_choice_reorgs_total: IntCounter,
@@ -69,45 +71,45 @@ pub struct Metrics {
 
     // State Transition Metrics
     /// Latest justified slot
-    lean_latest_justified_slot: IntGauge,
+    pub lean_latest_justified_slot: IntGauge,
 
     /// Latest finalized slot
-    lean_latest_finalized_slot: IntGauge,
+    pub lean_latest_finalized_slot: IntGauge,
 
     /// Total number of finalization attempts
-    lean_finalizations_total: IntCounter,
+    lean_finalizations_total: IntCounterVec,
 
     /// Time to process state transition
-    lean_state_transition_time_seconds: Histogram,
+    pub lean_state_transition_time_seconds: Histogram,
 
     /// Total number of processed slots
-    lean_state_transition_slots_processed_total: IntCounter,
+    pub lean_state_transition_slots_processed_total: IntCounter,
 
     /// Time taken to process slots
-    lean_state_transition_slots_processing_time_seconds: Histogram,
+    pub lean_state_transition_slots_processing_time_seconds: Histogram,
 
     /// Time taken to process block
-    lean_state_transition_block_processing_time_seconds: Histogram,
+    pub lean_state_transition_block_processing_time_seconds: Histogram,
 
     /// Total number of processed attestations
-    lean_state_transition_attestations_processed_total: IntCounter,
+    pub lean_state_transition_attestations_processed_total: IntCounter,
 
     /// Time taken to process attestations
-    lean_state_transition_attestations_processing_time_seconds: Histogram,
+    pub lean_state_transition_attestations_processing_time_seconds: Histogram,
 
     // Validator metrics
     /// Number of validators managed by a node
-    lean_validators_count: IntGauge,
+    pub lean_validators_count: IntGauge,
 
     // Network Metrics
     /// Number of connected peers
-    lean_connected_peers: IntGauge,
+    pub lean_connected_peers: IntGaugeVec,
 
     /// Total number of peer connection events
-    lean_peer_connection_events_total: IntCounter,
+    lean_peer_connection_events_total: IntCounterVec,
 
     /// Total number of peer disconnection events
-    lean_peer_disconnection_events_total: IntCounter,
+    lean_peer_disconnection_events_total: IntCounterVec,
 }
 
 impl Metrics {
@@ -178,13 +180,19 @@ impl Metrics {
                 "Time taken to process block",
                 vec![0.005, 0.01, 0.025, 0.05, 0.1, 1.0]
             ))?,
-            lean_attestations_valid_total: IntCounter::new(
-                "lean_attestations_valid_total",
-                "Total number of valid attestations",
+            lean_attestations_valid_total: IntCounterVec::new(
+                opts!(
+                    "lean_attestations_valid_total",
+                    "Total number of valid attestations",
+                ),
+                &["source"],
             )?,
-            lean_attestations_invalid_total: IntCounter::new(
-                "lean_attestations_invalid_total",
-                "Total number of invalid attestations",
+            lean_attestations_invalid_total: IntCounterVec::new(
+                opts!(
+                    "lean_attestations_invalid_total",
+                    "Total number of invalid attestations",
+                ),
+                &["source"],
             )?,
             lean_attestation_validation_time_seconds: Histogram::with_opts(histogram_opts!(
                 "lean_attestation_validation_time_seconds",
@@ -210,9 +218,12 @@ impl Metrics {
                 "lean_latest_finalized_slot",
                 "Latest finalized slot",
             )?,
-            lean_finalizations_total: IntCounter::new(
-                "lean_finalizations_total",
-                "Total number of finalization attempts",
+            lean_finalizations_total: IntCounterVec::new(
+                opts!(
+                    "lean_finalizations_total",
+                    "Total number of finalization attempts",
+                ),
+                &["result"],
             )?,
             lean_state_transition_time_seconds: Histogram::with_opts(histogram_opts!(
                 "lean_state_transition_time_seconds",
@@ -256,17 +267,23 @@ impl Metrics {
             )?,
 
             // Network Metrics
-            lean_connected_peers: IntGauge::new(
-                "lean_connected_peers",
-                "Number of connected peers",
+            lean_connected_peers: IntGaugeVec::new(
+                opts!("lean_connected_peers", "Number of connected peers",),
+                &["client"],
             )?,
-            lean_peer_connection_events_total: IntCounter::new(
-                "lean_peer_connection_events_total",
-                "Total number of peer connection events",
+            lean_peer_connection_events_total: IntCounterVec::new(
+                opts!(
+                    "lean_peer_connection_events_total",
+                    "Total number of peer connection events",
+                ),
+                &["direction", "result"],
             )?,
-            lean_peer_disconnection_events_total: IntCounter::new(
-                "lean_peer_disconnection_events_total",
-                "Total number of peer disconnection events",
+            lean_peer_disconnection_events_total: IntCounterVec::new(
+                opts!(
+                    "lean_peer_disconnection_events_total",
+                    "Total number of peer disconnection events",
+                ),
+                &["direction", "reason"],
             )?,
         })
     }
@@ -365,4 +382,63 @@ impl Metrics {
 
         Ok(())
     }
+
+    /// Increments successfull peer connection event count metric.
+    pub fn register_peer_connection_success(&self, is_inbound: bool) -> Result<()> {
+        let direction = if is_inbound { "inbound" } else { "outbound" };
+        let metric = self
+            .lean_peer_connection_events_total
+            .get_metric_with_label_values(&[direction, "success"])?;
+        metric.inc();
+        Ok(())
+    }
+
+    /// Increments peer connection failure event count metric.
+    pub fn register_peer_connection_failure(&self, is_inbound: bool) -> Result<()> {
+        let direction = if is_inbound { "inbound" } else { "outbound" };
+        let metric = self
+            .lean_peer_connection_events_total
+            .get_metric_with_label_values(&[direction, "failure"])?;
+        metric.inc();
+        Ok(())
+    }
+
+    /// Increments peer connection timeout event count metric.
+    pub fn register_peer_connection_timeout(&self, is_inbound: bool) -> Result<()> {
+        let direction = if is_inbound { "inbound" } else { "outbound" };
+        let metric = self
+            .lean_peer_connection_events_total
+            .get_metric_with_label_values(&[direction, "timeout"])?;
+        metric.inc();
+        Ok(())
+    }
+
+    pub fn register_peer_disconnect(
+        &self,
+        is_inbound: bool,
+        reason: DisconnectReason,
+    ) -> Result<()> {
+        let direction = if is_inbound { "inbound" } else { "outbound" };
+        let reason = match reason {
+            DisconnectReason::Timeout => "timeout",
+            DisconnectReason::RemoteClose => "remote_close",
+            DisconnectReason::LocalClose => "local_close",
+            DisconnectReason::Error => "error",
+        };
+        let metric = self
+            .lean_peer_disconnection_events_total
+            .get_metric_with_label_values(&[direction, reason])?;
+
+        metric.inc();
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum DisconnectReason {
+    Timeout,
+    RemoteClose,
+    LocalClose,
+    Error,
 }

@@ -6,6 +6,7 @@ use containers::{
 };
 use metrics::{stop_and_discard, METRICS};
 use ssz::SszHash;
+use tracing::warn;
 
 #[inline]
 pub fn on_tick(store: &mut Store, time: u64, has_proposal: bool) {
@@ -257,9 +258,24 @@ fn process_block_internal(
 
     if new_state.latest_justified.slot > store.latest_justified.slot {
         store.latest_justified = new_state.latest_justified.clone();
+        METRICS.get().map(|metrics| {
+            let Some(slot) = new_state.latest_justified.slot.0.try_into().ok() else {
+                warn!("unable to set latest_justified slot in metrics");
+                return;
+            };
+            metrics.lean_latest_justified_slot.set(slot);
+        });
     }
+
     if new_state.latest_finalized.slot > store.latest_finalized.slot {
         store.latest_finalized = new_state.latest_finalized.clone();
+        METRICS.get().map(|metrics| {
+            let Some(slot) = new_state.latest_finalized.slot.0.try_into().ok() else {
+                warn!("unable to set latest_finalized slot in metrics");
+                return;
+            };
+            metrics.lean_latest_finalized_slot.set(slot);
+        });
     }
 
     // Process block body attestations as on-chain (is_from_block=true)

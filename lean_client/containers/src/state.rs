@@ -7,6 +7,7 @@ use crate::{
 use crate::{
     HistoricalBlockHashes, JustificationRoots, JustificationsValidators, JustifiedSlots, Validators,
 };
+use metrics::METRICS;
 use serde::{Deserialize, Serialize};
 use ssz::PersistentList as List;
 use ssz_derive::Ssz;
@@ -247,6 +248,9 @@ impl State {
             return Err("Block signatures must be valid".to_string());
         }
 
+        let _timer = METRICS
+            .get()
+            .map(|metrics| metrics.lean_state_transition_time_seconds.start_timer());
         let block = &signed_block.message.block;
         let mut state = self.process_slots(block.slot)?;
         state = state.process_block(block)?;
@@ -267,11 +271,21 @@ impl State {
             return Err("Target slot must be in the future".to_string());
         }
 
+        let _timer = METRICS.get().map(|metrics| {
+            metrics
+                .lean_state_transition_slots_processing_time_seconds
+                .start_timer()
+        });
+
         let mut state = self.clone();
 
         while state.slot < target_slot {
             state = state.process_slot();
             state.slot = Slot(state.slot.0 + 1);
+
+            METRICS
+                .get()
+                .map(|metrics| metrics.lean_state_transition_slots_processed_total.inc());
         }
 
         Ok(state)
@@ -296,6 +310,12 @@ impl State {
     }
 
     pub fn process_block(&self, block: &Block) -> Result<Self, String> {
+        let _timer = METRICS.get().map(|metrics| {
+            metrics
+                .lean_state_transition_block_processing_time_seconds
+                .start_timer()
+        });
+
         let state = self.process_block_header(block)?;
 
         if AggregatedAttestation::has_duplicate_data(&block.body.attestations) {
@@ -393,6 +413,12 @@ impl State {
     }
 
     pub fn process_attestations(&self, attestations: &AggregatedAttestations) -> Self {
+        let _timer = METRICS.get().map(|metrics| {
+            metrics
+                .lean_state_transition_attestations_processing_time_seconds
+                .start_timer()
+        });
+
         let mut justifications = self.get_justifications();
         let mut latest_justified = self.latest_justified.clone();
         let mut latest_finalized = self.latest_finalized.clone();
@@ -411,6 +437,11 @@ impl State {
         }
 
         for aggregated_attestation in attestations {
+            METRICS.get().map(|metrics| {
+                metrics
+                    .lean_state_transition_attestations_processed_total
+                    .inc()
+            });
             let validator_ids = aggregated_attestation
                 .aggregation_bits
                 .to_validator_indices();

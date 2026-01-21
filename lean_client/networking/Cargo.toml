@@ -30,3 +30,4 @@ discv5 = "0.10.2"
 hex = "0.4.3"
 tiny-keccak = "2.0.2"
 derive_more = "2.1.1"
+metrics = { workspace = true }
