@@ -28,6 +28,7 @@ anyhow = "1.0.100"
 alloy-primitives = "1.5.2"
 # ethereum_ssz for lean-multisig types (aliased to avoid conflict with grandine ssz)
 eth_ssz = { package = "ethereum_ssz", version = "0.10.0" }
+metrics = { workspace = true }
 
 [dev-dependencies]
 rstest = "0.18"

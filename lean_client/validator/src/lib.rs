@@ -12,6 +12,7 @@ use containers::{
     Slot,
 };
 use fork_choice::store::{get_proposal_head, get_vote_target, Store};
+use metrics::METRICS;
 use tracing::{info, warn};
 
 pub mod keys;
@@ -285,6 +286,12 @@ impl ValidatorService {
         let proposer_signature: Signature;
 
         if let Some(ref key_manager) = self.key_manager {
+            let _timer = METRICS.get().map(|metrics| {
+                metrics
+                    .lean_pq_sig_attestation_signing_time_seconds
+                    .start_timer()
+            });
+
             // Sign proposer attestation with XMSS
             let message = hash_tree_root(&proposer_attestation);
             let epoch = slot.0 as u32;
@@ -369,6 +376,12 @@ impl ValidatorService {
                 };
 
                 let signature = if let Some(ref key_manager) = self.key_manager {
+                    let _timer = METRICS.get().map(|metrics| {
+                        metrics
+                            .lean_pq_sig_attestation_signing_time_seconds
+                            .start_timer()
+                    });
+
                     // Sign with XMSS
                     let message = hash_tree_root(&attestation);
                     let epoch = slot.0 as u32;

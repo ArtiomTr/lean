@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use containers::{
     attestation::{AttestationData, SignedAttestation},
     block::{Block, SignedBlockWithAttestation},
@@ -7,6 +8,7 @@ use containers::{
     Bytes32, Root, Slot, ValidatorIndex,
 };
 use containers::{AggregatedSignatureProof, Signature, SignatureKey};
+use metrics::set_gauge_u64;
 use ssz::SszHash;
 use std::collections::HashMap;
 
@@ -185,6 +187,18 @@ pub fn update_head(store: &mut Store) {
         0,
     );
     store.head = new_head;
+
+    set_gauge_u64(
+        |m| &m.lean_head_slot,
+        || {
+            let head = store
+                .blocks
+                .get(&new_head)
+                .ok_or(anyhow!("failed to get head block"))?;
+
+            Ok(head.message.block.slot.0)
+        },
+    );
 }
 
 pub fn update_safe_target(store: &mut Store) {
@@ -196,8 +210,21 @@ pub fn update_safe_target(store: &mut Store) {
 
     let min_score = (n_validators * 2 + 2) / 3;
     let root = store.latest_justified.root;
-    store.safe_target =
+    let new_safe_target =
         get_fork_choice_head(store, root, &store.latest_new_attestations, min_score);
+    store.safe_target = new_safe_target;
+
+    set_gauge_u64(
+        |metrics| &metrics.lean_safe_target_slot,
+        || {
+            let safe_target = store
+                .blocks
+                .get(&new_safe_target)
+                .ok_or(anyhow!("failed to get safe target block"))?;
+
+            Ok(safe_target.message.block.slot.0)
+        },
+    );
 }
 
 pub fn accept_new_attestations(store: &mut Store) {

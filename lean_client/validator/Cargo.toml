@@ -12,6 +12,7 @@ env-config = { path = "../env-config", default-features = false }
 serde_yaml = "0.9"
 containers = { path = "../containers" }
 fork-choice = { path = "../fork_choice" }
-tracing = "0.1"
+tracing = { workspace = true }
 typenum = "1.17"
 leansig = { git = "https://github.com/leanEthereum/leanSig", branch = "main", optional = true }
+metrics = { workspace = true }

@@ -4,6 +4,7 @@ use containers::SignatureKey;
 use containers::{
     attestation::SignedAttestation, block::SignedBlockWithAttestation, Bytes32, ValidatorIndex,
 };
+use metrics::{stop_and_discard, METRICS};
 use ssz::SszHash;
 
 #[inline]
@@ -195,9 +196,16 @@ fn on_attestation_internal(
 /// 4. Updating the forkchoice head
 /// 5. Processing the proposer's attestation (as if gossiped)
 pub fn on_block(store: &mut Store, signed_block: SignedBlockWithAttestation) -> Result<(), String> {
+    let timer = METRICS.get().map(|metrics| {
+        metrics
+            .lean_fork_choice_block_processing_time_seconds
+            .start_timer()
+    });
+
     let block_root = Bytes32(signed_block.message.block.hash_tree_root());
 
     if store.blocks.contains_key(&block_root) {
+        stop_and_discard(timer);
         return Ok(());
     }
 
@@ -209,6 +217,7 @@ pub fn on_block(store: &mut Store, signed_block: SignedBlockWithAttestation) -> 
             .entry(parent_root)
             .or_insert_with(Vec::new)
             .push(signed_block);
+        stop_and_discard(timer);
         return Err(format!(
             "Err: (Fork-choice::Handlers::OnBlock) Block queued: parent {:?} not yet available (pending: {} blocks)",
             &parent_root.0.as_bytes()[..4],

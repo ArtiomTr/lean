@@ -1,6 +1,7 @@
 use crate::{
     Attestation, Bytes32, MultisigAggregatedSignature, Signature, Slot, State, ValidatorIndex,
 };
+use metrics::METRICS;
 use serde::{Deserialize, Serialize};
 use ssz_derive::Ssz;
 

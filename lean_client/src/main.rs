@@ -1,7 +1,9 @@
+use anyhow::{Context as _, Result};
 use clap::Parser;
 use containers::block::BlockSignatures;
 use containers::ssz::{PersistentList, SszHash};
 use containers::{
+    Signature, Slot,
     attestation::{Attestation, AttestationData},
     block::{Block, BlockBody, BlockWithAttestation, SignedBlockWithAttestation},
     checkpoint::Checkpoint,
@@ -9,25 +11,25 @@ use containers::{
     ssz,
     state::State,
     types::{Bytes32, Uint64, ValidatorIndex},
-    Signature, Slot,
 };
 use fork_choice::{
     handlers::{on_attestation, on_block, on_tick},
-    store::{get_forkchoice_store, Store, INTERVALS_PER_SLOT},
+    store::{INTERVALS_PER_SLOT, Store, get_forkchoice_store},
 };
 use libp2p_identity::Keypair;
+use metrics::{METRICS, Metrics};
 use networking::gossipsub::config::GossipsubConfig;
 use networking::gossipsub::topic::get_topics;
 use networking::network::{NetworkService, NetworkServiceConfig};
 use networking::types::{ChainMessage, OutboundP2pRequest};
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::{
     sync::mpsc,
     task,
-    time::{interval, Duration},
+    time::{Duration, interval},
 };
 use tracing::level_filters::LevelFilter;
 use tracing::{debug, info, warn};
@@ -128,10 +130,14 @@ struct Args {
     /// Path: directory containing XMSS validator keys (validator_N_sk.ssz files)
     #[arg(long)]
     hash_sig_key_dir: Option<String>,
+
+    /// Enable metrics
+    #[arg(long)]
+    metrics: bool,
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::builder()
@@ -141,6 +147,25 @@ async fn main() {
         .init();
 
     let args = Args::parse();
+
+    let metrics = if args.metrics {
+        let metrics = Metrics::new()?;
+        metrics.register_with_default_metrics()?;
+        let metrics = Arc::new(metrics);
+        METRICS.get_or_init(|| metrics.clone());
+
+        Some(metrics)
+    } else {
+        None
+    };
+
+    metrics
+        .map(|metrics| {
+            metrics.set_client_version("grandine".to_owned(), "0.0.0".to_owned());
+            metrics.set_start_time(SystemTime::now())
+        })
+        .transpose()
+        .context("failed to set metrics on start")?;
 
     let (outbound_p2p_sender, outbound_p2p_receiver) =
         mpsc::unbounded_channel::<OutboundP2pRequest>();
@@ -569,4 +594,6 @@ async fn main() {
     }
 
     println!("Main async task exiting...");
+
+    Ok(())
 }
