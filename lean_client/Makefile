@@ -1,9 +1,27 @@
+### Variables
+
+# Commit of lean specification. Allows to specify which spec version to use, 
+#   when generating test vectors. Currently set to devnet-2 spec version.
+LEAN_SPEC_COMMIT ?= c187aab89e0ecc6ce9c1fd9304fd708312ea7106
+# Docker image name. Used for both release (with publish) and local builds.
+DOCKER_REPO ?= sifrai/lean
+# Image tag.
+DOCKER_TAG ?= unstable
+# Git commit hash of current source version. Used to include metadata into 
+#   docker image.
+COMMIT_SHA := $(shell git rev-parse HEAD)
+# Build date. Used for docker image metadata.
+BUILD_DATE := $(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
+
 all: build check-format test
 
+### Linting
+## Format source code.
 .PHONY: format
 format:
 	cargo fmt
 
+## Check source code formatting. Issues can be automatically fixed with `make format`.
 .PHONY: check-format
 check-format:
 	cargo fmt --check
@@ -11,6 +29,18 @@ check-format:
 .PHONY: test
 test:
 	cargo test --workspace --features devnet2,xmss-signing --no-fail-fast
+
+.PHONY: generate-test-vectors
+generate-test-vectors:
+	@rm -rf spec && \
+		mkdir -p spec && \
+		cd spec && \
+		git init && \
+		git remote add origin https://github.com/leanEthereum/leanSpec.git && \
+		git fetch --depth 1 origin $(LEAN_SPEC_COMMIT) && \
+		git switch --detach FETCH_HEAD
+	cd spec && uv run fill --clean --fork=devnet
+	cp -r ./spec/fixtures/consensus/* ./tests/test_vectors/
 
 .PHONY: build
 build:
@@ -27,11 +57,6 @@ aarch64-unknown-linux-gnu: ./target/aarch64-unknown-linux-gnu/release/lean_clien
 
 ./target/aarch64-unknown-linux-gnu/release/lean_client:
 	cross build --bin lean_client --target aarch64-unknown-linux-gnu --profile release
-
-DOCKER_REPO ?= sifrai/lean
-DOCKER_TAG ?= unstable
-COMMIT_SHA := $(shell git rev-parse HEAD)
-BUILD_DATE := $(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
 
 .PHONY: release
 release: docker
@@ -63,3 +88,18 @@ docker-local: ./target/x86_64-unknown-linux-gnu/release/lean_client ./target/aar
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		--tag $(DOCKER_REPO):$(DOCKER_TAG) \
 		.
+
+.PHONY: help
+help:
+	@awk '/^## / { \
+		sub(/^## /, ""); \
+		helpMsg = $$0; \
+	} \
+	/^[a-zA-Z_-]+:/ { \
+		if (helpMsg) { \
+			target = $$1; \
+			sub(/:/, "", target); \
+			printf "\033[36m%-20s\033[0m %s\n", target, helpMsg; \
+			helpMsg = ""; \
+		} \
+	}' $(MAKEFILE_LIST)
