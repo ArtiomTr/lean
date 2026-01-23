@@ -26,10 +26,13 @@ endif
 
 all: build check-format test
 
+### Linting
+## Format source code.
 .PHONY: format
 format:
 	cargo fmt
 
+## Check source code formatting. Issues can be automatically fixed with `make format`.
 .PHONY: check-format
 check-format:
 	cargo fmt --check
@@ -37,6 +40,18 @@ check-format:
 .PHONY: test
 test:
 	cargo test --workspace --features devnet2,xmss-signing --no-fail-fast
+
+.PHONY: generate-test-vectors
+generate-test-vectors:
+	@rm -rf spec && \
+		mkdir -p spec && \
+		cd spec && \
+		git init && \
+		git remote add origin https://github.com/leanEthereum/leanSpec.git && \
+		git fetch --depth 1 origin $(LEAN_SPEC_COMMIT) && \
+		git switch --detach FETCH_HEAD
+	cd spec && uv run fill --clean --fork=devnet
+	cp -r ./spec/fixtures/consensus/* ./tests/test_vectors/
 
 .PHONY: build
 build:
@@ -53,11 +68,6 @@ aarch64-unknown-linux-gnu: ./target/aarch64-unknown-linux-gnu/release/lean_clien
 
 ./target/aarch64-unknown-linux-gnu/release/lean_client:
 	cross build --bin lean_client --target aarch64-unknown-linux-gnu --profile release
-
-DOCKER_REPO ?= sifrai/lean
-DOCKER_TAG ?= unstable
-COMMIT_SHA := $(shell git rev-parse HEAD)
-BUILD_DATE := $(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
 
 .PHONY: release
 release: docker
