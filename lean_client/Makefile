@@ -16,6 +16,14 @@ GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD)
 # Build date. Used for docker image metadata.
 BUILD_DATE := $(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
 
+# Temporary variable, which constructs `--tag` arguments, to be passed into 
+#   docker build command. It is used as intermediatery step, not as config 
+#   option.
+DOCKER_TAGS := --tag $(DOCKER_REPO):$(DOCKER_TAG)
+ifeq ($(DOCKER_TAG),unstable)
+    DOCKER_TAGS += --tag $(DOCKER_REPO):latest
+endif
+
 all: build check-format test
 
 .PHONY: format
@@ -66,7 +74,7 @@ docker: ./target/x86_64-unknown-linux-gnu/release/lean_client ./target/aarch64-u
 		--build-arg COMMIT_SHA=$(COMMIT_SHA) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		--build-arg GIT_BRANCH=$(GIT_BRANCH) \
-		--tag $(DOCKER_REPO):$(DOCKER_TAG) \
+		$(DOCKER_TAGS) \
 		--push \
 		.
 
@@ -79,7 +87,7 @@ docker-local: ./target/x86_64-unknown-linux-gnu/release/lean_client
 		--build-arg COMMIT_SHA=$(COMMIT_SHA) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
 		--build-arg GIT_BRANCH=$(GIT_BRANCH) \
-		--tag $(DOCKER_REPO):$(DOCKER_TAG) \
+		$(DOCKER_TAGS) \
 		.
 
 .PHONY: help
