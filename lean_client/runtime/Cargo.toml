@@ -1,0 +1,10 @@
+[package]
+name = "runtime"
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+strum = { workspace = true }

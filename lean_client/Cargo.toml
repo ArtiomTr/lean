@@ -7,6 +7,7 @@ members = [
     "http_api",
     "metrics",
     "networking",
+    "runtime",
     "validator",
     "xmss",
 ]
@@ -278,6 +279,7 @@ sha2 = "0.10"
 snap = "1.1"
 ssz = { git = "https://github.com/grandinetech/grandine", package = "ssz", rev = "64afdee3c6be79fceffb66933dcb69a943f3f1ae" }
 ssz-types = "0.3"
+strum = { version = "0.27", features = ["derive"] }
 itertools = "0.14"
 test-generator = "0.3.1"
 thiserror = "2"
