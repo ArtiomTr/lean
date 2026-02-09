@@ -1,4 +1,4 @@
-use crate::clock::Clock;
+use crate::{clock::Clock, event::Event};
 
 pub struct Node<C: Context> {
     context: C,
@@ -11,5 +11,9 @@ pub trait Context {
 }
 
 impl<C: Context> Node<C> {
-    fn handle_event() {}
+    fn handle_event(&self, event: Event) {
+        match event {
+            Event::TickEvent { interval, slot } => {}
+        }
+    }
 }

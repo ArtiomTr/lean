@@ -17,13 +17,15 @@ const SLOT_DURATION: Duration = Duration::from_secs(4);
 /// below.
 ///
 /// When [#143874] gets stabilized, this constant can be replaced with:
-/// ```rust
+/// ```rust,compile_fail
 /// SLOT_DURATION / Interval::COUNT as u32
 /// ```
 ///
 /// TODO(rust-update): check if [#143874] is stabilized, when upgrading from
 /// 1.92.0.
 const DURATION_PER_INTERVAL: Duration = Duration::from_secs(1);
+
+pub type Slot = u64;
 
 #[derive(Debug, FromRepr, EnumCount)]
 #[repr(u8)]
@@ -39,13 +41,13 @@ pub trait Clock {
     /// the future.
     fn time_since_genesis(&self) -> Option<Duration>;
 
-    fn checked_current_slot(&self) -> Option<u64> {
+    fn checked_current_slot(&self) -> Option<Slot> {
         let time = self.time_since_genesis()?;
 
         Some(time.as_secs() / SLOT_DURATION.as_secs())
     }
 
-    fn current_slot(&self) -> u64 {
+    fn current_slot(&self) -> Slot {
         self.checked_current_slot()
             .expect("genesis time is in the future")
     }
