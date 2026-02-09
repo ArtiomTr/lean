@@ -71,14 +71,14 @@ pub trait Clock {
 pub struct SystemClock(SystemTime);
 
 impl SystemClock {
-    fn new(genesis_timestamp: u64) -> Result<Self> {
+    pub fn new(genesis_timestamp: u64) -> Result<Self> {
         SystemTime::UNIX_EPOCH
             .checked_add(Duration::from_secs(genesis_timestamp))
             .ok_or(anyhow!("invalid timestamp"))
             .map(Self)
     }
 
-    fn genesis_time(&self) -> SystemTime {
+    pub fn genesis_time(&self) -> SystemTime {
         self.0
     }
 }

@@ -7,7 +7,7 @@ pub struct Node<C: Context> {
 pub trait Context {
     type Clock: Clock;
 
-    fn clock(&self) -> Self::Clock;
+    fn clock(&self) -> &Self::Clock;
 }
 
 impl<C: Context> Node<C> {
