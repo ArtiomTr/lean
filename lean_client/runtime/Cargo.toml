@@ -7,5 +7,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+enum-iterator = { workspace = true }
 strum = { workspace = true }
 tokio = { workspace = true }
+tokio-stream = { workspace = true }

@@ -5170,8 +5170,10 @@ name = "runtime"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "enum-iterator",
  "strum",
  "tokio",
+ "tokio-stream",
 ]
 
 [[package]]

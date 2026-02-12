@@ -3,10 +3,13 @@
 //! The point of this is to abstract time as a non-deterministic source, so it
 //! can be simulated in tests.
 
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, anyhow};
-use strum::{EnumCount, FromRepr};
+use enum_iterator::Sequence;
+use strum::FromRepr;
+use tokio::time::Instant;
+use tokio_stream::{Stream, StreamExt, wrappers::IntervalStream};
 
 /// NOTE: if this ever becomes a fractional number of seconds (i.e. 2.5, 0.5,
 /// etc.), don't forget to update `current_slot` functionality too.
@@ -27,13 +30,43 @@ const DURATION_PER_INTERVAL: Duration = Duration::from_secs(1);
 
 pub type Slot = u64;
 
-#[derive(Debug, FromRepr, EnumCount)]
+#[derive(Debug, Clone, Copy)]
+pub struct Tick {
+    pub slot: Slot,
+    pub interval: Interval,
+}
+
+impl Tick {
+    #[must_use]
+    pub const fn start_of_slot(slot: Slot) -> Self {
+        Self::new(slot, Interval::BlockProposal)
+    }
+
+    pub const fn new(slot: Slot, interval: Interval) -> Self {
+        Self { slot, interval }
+    }
+
+    fn next(self) -> Result<Self> {
+        let Self { slot, interval } = self;
+
+        let next_slot = match interval.next() {
+            Some(_) => slot,
+            None => slot.checked_add(1).ok_or(anyhow!("out of slots"))?,
+        };
+
+        let next_interval = enum_iterator::next_cycle(&interval);
+
+        Ok(Self::new(next_slot, next_interval))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Sequence, FromRepr)]
 #[repr(u8)]
 pub enum Interval {
-    BlockProposal = 0,
-    AttestationBroadcast = 1,
-    SafeTargetUpdate = 2,
-    AttestationAcceptance = 3,
+    BlockProposal,
+    AttestationBroadcast,
+    SafeTargetUpdate,
+    AttestationAcceptance,
 }
 
 pub trait Clock {
@@ -81,6 +114,73 @@ impl SystemClock {
     pub fn genesis_time(&self) -> SystemTime {
         self.0
     }
+
+    pub fn ticks(&self) -> Result<impl Stream<Item = Result<Tick>> + use<>> {
+        let now_instant = Instant::now();
+        let now_system_time = SystemTime::now();
+
+        let (mut next_tick, next_instant) = next_tick_with_instant(
+            now_instant,
+            now_system_time,
+            self.genesis_time()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        )?;
+
+        let interval = tokio::time::interval_at(next_instant.into(), SLOT_DURATION);
+
+        Ok(IntervalStream::new(interval).map(move |_| {
+            let current_tick = next_tick;
+            next_tick = current_tick.next()?;
+            Ok(current_tick)
+        }))
+    }
+}
+
+fn next_tick_with_instant(
+    now_instant: Instant,
+    now_system_time: SystemTime,
+    genesis_time: u64,
+) -> Result<(Tick, Instant)> {
+    let unix_epoch_to_now = now_system_time.duration_since(UNIX_EPOCH)?;
+    let unix_epoch_to_genesis = Duration::from_secs(genesis_time);
+
+    let mut next_tick;
+    let mut now_to_next_tick;
+
+    if unix_epoch_to_now <= unix_epoch_to_genesis {
+        next_tick = Tick::start_of_slot(0);
+        now_to_next_tick = unix_epoch_to_genesis
+            .checked_sub(unix_epoch_to_now)
+            .expect("the difference from genesis to now fits in Duration");
+    } else {
+        let genesis_to_now = unix_epoch_to_now
+            .checked_sub(unix_epoch_to_genesis)
+            .expect("the difference from now to genesis fits in Duration");
+        let slots_since_genesis = genesis_to_now.as_secs() / SLOT_DURATION.as_secs();
+        let genesis_to_current_slot =
+            Duration::from_secs(slots_since_genesis * SLOT_DURATION.as_secs());
+        let current_slot_to_now = genesis_to_now
+            .checked_sub(genesis_to_current_slot)
+            .expect("the difference from now to current slot fits in Duration");
+
+        next_tick = Tick::start_of_slot(slots_since_genesis);
+        now_to_next_tick = Duration::ZERO;
+
+        while now_to_next_tick < current_slot_to_now {
+            next_tick = next_tick.next()?;
+            now_to_next_tick += DURATION_PER_INTERVAL;
+        }
+
+        now_to_next_tick -= current_slot_to_now;
+    }
+
+    let next_instant = now_instant
+        .checked_add(now_to_next_tick)
+        .ok_or(anyhow!("next instant overflow"))?;
+
+    Ok((next_tick, next_instant))
 }
 
 impl Clock for SystemClock {
@@ -91,7 +191,7 @@ impl Clock for SystemClock {
 
 #[cfg(test)]
 mod tests {
-    use strum::EnumCount;
+    use enum_iterator::Sequence;
 
     use crate::clock::{DURATION_PER_INTERVAL, Interval, SLOT_DURATION};
 
@@ -99,7 +199,7 @@ mod tests {
     fn configuration_is_valid() {
         assert_eq!(
             DURATION_PER_INTERVAL,
-            SLOT_DURATION / Interval::COUNT as u32
+            SLOT_DURATION / Interval::CARDINALITY as u32
         );
     }
 }

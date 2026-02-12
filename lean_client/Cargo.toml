@@ -239,6 +239,7 @@ clap = { version = "4", features = ["derive"] }
 derive_more = "2.1.1"
 discv5 = "0.10.2"
 enr = { version = "0.13", features = ["k256"] }
+enum-iterator = '2'
 eth_ssz = { package = "ethereum_ssz", version = "0.10.0" }
 ethereum-types = "0.14"
 futures = "0.3"
@@ -285,6 +286,7 @@ test-generator = "0.3.1"
 thiserror = "2"
 tiny-keccak = "2.0.2"
 tokio = { version = "1.0", features = ["full"] }
+tokio-stream = { version = '0.1', features = ['sync'] }
 tower-http = { version = '0.6', features = ['cors', 'trace'] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }

@@ -1,5 +1,6 @@
-use crate::clock::{Interval, Slot};
+use crate::clock::Tick;
 
+#[derive(Debug, Clone)]
 pub enum Event {
-    TickEvent { interval: Interval, slot: Slot },
+    Tick(Tick),
 }
