@@ -37,9 +37,9 @@ impl RealSimulator {
     }
 
     async fn execute(self) -> Result<()> {
-        let mut ticks = self.clock.ticks()?;
-
         let (tx, rx) = broadcast::channel(128);
+
+        let mut ticks = self.clock.ticks()?;
 
         // Spawn event collector.
         // This thread collects all events from all external non-determinism

@@ -5171,6 +5171,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "enum-iterator",
+ "fork_choice",
  "strum",
  "tokio",
  "tokio-stream",
