@@ -8,8 +8,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Result, anyhow};
 use enum_iterator::Sequence;
 use strum::FromRepr;
-use tokio::time::Instant;
+use tokio::{sync::mpsc, time::Instant};
 use tokio_stream::{Stream, StreamExt, wrappers::IntervalStream};
+
+use crate::simulation::{EventSource, Service};
 
 /// NOTE: if this ever becomes a fractional number of seconds (i.e. 2.5, 0.5,
 /// etc.), don't forget to update `current_slot` functionality too.
@@ -135,6 +137,21 @@ impl SystemClock {
             next_tick = current_tick.next()?;
             Ok(current_tick)
         }))
+    }
+}
+
+impl EventSource for SystemClock {
+    // Clock has no effects
+    type Effect = ();
+
+    // Clock emits only tick events.
+    type Event = Tick;
+
+    fn run(
+        &mut self,
+        tx: mpsc::UnboundedSender<Self::Event>,
+        rx: mpsc::UnboundedReceiver<Self::Effect>,
+    ) {
     }
 }
 

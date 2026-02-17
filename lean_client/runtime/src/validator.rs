@@ -26,11 +26,7 @@ use ssz::{H256, PersistentList, SszHash as _};
 use tracing::{debug, info, warn};
 use xmss::{SecretKey, Signature};
 
-use crate::{
-    chain::ChainMessage,
-    clock::Interval,
-    event::Effect,
-};
+use crate::{chain::ChainMessage, clock::Interval};
 
 /// Messages that ValidatorService receives (input to the state machine).
 pub enum ValidatorMessage {
@@ -323,13 +319,19 @@ impl ValidatorService {
             };
 
             self.attestations_produced += 1;
-            info!(slot = slot.0, validator = validator_idx, "Attestation produced");
+            info!(
+                slot = slot.0,
+                validator = validator_idx,
+                "Attestation produced"
+            );
 
             // Request ChainService to process locally + gossip to network.
             outputs.push(ValidatorOutput::Message(ChainMessage::ProcessAttestation(
                 signed_att.clone(),
             )));
-            outputs.push(ValidatorOutput::Effect(Effect::GossipAttestation(signed_att)));
+            outputs.push(ValidatorOutput::Effect(Effect::GossipAttestation(
+                signed_att,
+            )));
         }
 
         outputs

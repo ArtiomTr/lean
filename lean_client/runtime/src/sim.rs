@@ -1,14 +1,18 @@
 use anyhow::{Error, Result};
 use fork_choice::store::Store;
 
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::StreamExt as _;
+use tracing::Span;
 
 use crate::{
     chain::{ChainInput, ChainMessage, ChainService},
     clock::SystemClock,
-    event::{Effect, Event},
-    validator::{KeyManager, ValidatorConfig, ValidatorInput, ValidatorMessage, ValidatorOutput, ValidatorService},
+    simulation::{Effect, Event, EventSource, SpannedEvent},
+    validator::{
+        KeyManager, ValidatorConfig, ValidatorInput, ValidatorMessage, ValidatorOutput,
+        ValidatorService,
+    },
 };
 
 pub struct RealSimulator {
@@ -43,6 +47,28 @@ impl RealSimulator {
         });
 
         Ok(())
+    }
+
+    fn spawn_event_source<T: EventSource>(
+        self,
+        mut source: T,
+        tx: broadcast::Sender<SpannedEvent>,
+        map_event: impl Fn(T::Event) -> Event + 'static + Send,
+    ) -> mpsc::UnboundedSender<T::Effect> {
+        let (temp_tx, mut temp_rx) = mpsc::unbounded_channel();
+
+        tokio::task::spawn(async move {
+            while let Some(event) = temp_rx.recv().await {
+                let event = map_event(event);
+                tx.send(SpannedEvent::new(Span::none(), event));
+            }
+        });
+
+        let (out_tx, out_rx) = mpsc::unbounded_channel();
+
+        source.run(temp_tx, out_rx);
+
+        out_tx
     }
 
     async fn execute(self) -> Result<()> {
