@@ -7,8 +7,13 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+bls = { workspace = true }
+containers = { workspace = true }
 enum-iterator = { workspace = true }
 fork_choice = { workspace = true }
+ssz = { workspace = true }
 strum = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
+tracing = { workspace = true }
+xmss = { workspace = true }

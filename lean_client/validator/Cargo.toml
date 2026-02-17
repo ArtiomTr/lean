@@ -4,13 +4,16 @@ edition = { workspace = true }
 
 [dependencies]
 anyhow = { workspace = true }
+chain = { path = "../chain" }
 containers = { workspace = true }
 env-config = { workspace = true }
 ethereum-types = { workspace = true }
 fork_choice = { workspace = true }
 metrics = { workspace = true }
+networking = { path = "../networking" }
 serde_yaml = { workspace = true }
 ssz = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
 typenum = { workspace = true }
 xmss = { workspace = true }

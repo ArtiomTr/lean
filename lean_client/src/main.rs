@@ -1,4 +1,5 @@
 use anyhow::{Context as _, Result};
+use chain::{ChainService, SlotClock};
 use clap::Parser;
 use containers::{
     Attestation, AttestationData, Block, BlockBody, BlockSignatures, BlockWithAttestation,
@@ -7,29 +8,26 @@ use containers::{
 use ethereum_types::H256;
 use features::Feature;
 use fork_choice::{
-    handlers::{on_attestation, on_block, on_tick},
-    store::{INTERVALS_PER_SLOT, Store, get_forkchoice_store},
+    handlers::{on_attestation, on_block},
+    store::{Store, get_forkchoice_store, INTERVALS_PER_SLOT},
 };
 use http_api::HttpServerConfig;
 use libp2p_identity::Keypair;
-use metrics::{METRICS, Metrics, MetricsServerConfig};
+use metrics::{METRICS, Metrics};
 use networking::gossipsub::config::GossipsubConfig;
 use networking::gossipsub::topic::get_topics;
 use networking::network::{NetworkService, NetworkServiceConfig};
 use networking::types::{ChainMessage, OutboundP2pRequest};
 use ssz::{PersistentList, SszHash};
 use std::net::IpAddr;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::{
-    sync::mpsc,
-    task,
-    time::{Duration, interval},
-};
+use std::time::SystemTime;
+use tokio::sync::mpsc;
+use tokio::task;
 use tracing::level_filters::LevelFilter;
-use tracing::{debug, error, info, warn};
-use validator::{ValidatorConfig, ValidatorService};
+use tracing::{error, info, warn};
+use validator::{KeyManager, ValidatorConfig, ValidatorService};
 use xmss::{PublicKey, Signature};
 
 fn load_node_key(path: &str) -> Result<Keypair, Box<dyn std::error::Error>> {
@@ -254,55 +252,66 @@ async fn main() -> Result<()> {
     let num_validators = genesis_state.validators.len_u64();
     info!(num_validators = num_validators, "Genesis state loaded");
 
-    let validator_service = if let (Some(node_id), Some(registry_path)) =
+    // Wrap store in Arc<RwLock> for shared access between services
+    let store = Arc::new(RwLock::new(store));
+    let clock = SlotClock::new(genesis_time);
+
+    // Load validator configuration and keys
+    let validator_config_and_keys = if let (Some(node_id), Some(registry_path)) =
         (&args.node_id, &args.validator_registry_path)
     {
         match ValidatorConfig::load_from_file(registry_path, node_id) {
             Ok(config) => {
-                // Use explicit hash-sig-key-dir if provided
-                if let Some(ref keys_dir) = args.hash_sig_key_dir {
+                let key_manager = if let Some(ref keys_dir) = args.hash_sig_key_dir {
                     let keys_path = std::path::Path::new(keys_dir);
                     if keys_path.exists() {
-                        match ValidatorService::new_with_keys(
-                            config.clone(),
-                            num_validators,
-                            keys_path,
-                        ) {
-                            Ok(service) => {
+                        match KeyManager::new(keys_path) {
+                            Ok(mut km) => {
+                                // Load keys for all assigned validators
+                                for &idx in &config.validator_indices {
+                                    if let Err(e) = km.load_key(idx) {
+                                        warn!(
+                                            validator = idx,
+                                            error = %e,
+                                            "Failed to load key for validator"
+                                        );
+                                    }
+                                }
                                 info!(
                                     node_id = %node_id,
                                     indices = ?config.validator_indices,
                                     keys_dir = ?keys_path,
                                     "Validator mode enabled with XMSS signing"
                                 );
-                                Some(service)
+                                Some(km)
                             }
                             Err(e) => {
                                 warn!(
-                                    "Failed to load XMSS keys: {}, falling back to zero signatures",
-                                    e
+                                    error = %e,
+                                    "Failed to load XMSS keys, falling back to zero signatures"
                                 );
-                                Some(ValidatorService::new(config, num_validators))
+                                None
                             }
                         }
                     } else {
                         warn!(
-                            "Hash-sig key directory not found: {:?}, using zero signatures",
-                            keys_path
+                            keys_dir = ?keys_path,
+                            "Hash-sig key directory not found, using zero signatures"
                         );
-                        Some(ValidatorService::new(config, num_validators))
+                        None
                     }
                 } else {
                     info!(
                         node_id = %node_id,
                         indices = ?config.validator_indices,
-                        "Validator mode enabled (no --hash-sig-key-dir specified - using zero signatures)"
+                        "Validator mode enabled (no --hash-sig-key-dir - using zero signatures)"
                     );
-                    Some(ValidatorService::new(config, num_validators))
-                }
+                    None
+                };
+                Some((config, key_manager))
             }
             Err(e) => {
-                warn!("Failed to load validator config: {}", e);
+                warn!(error = %e, "Failed to load validator config");
                 None
             }
         }
@@ -375,133 +384,53 @@ async fn main() -> Result<()> {
         }
     });
 
-    let chain_outbound_sender = outbound_p2p_sender.clone();
-
     let http_handle = task::spawn(async move {
         if let Err(err) = http_api::run_server(args.http_config).await {
             error!("HTTP Server failed with error: {err:?}");
         }
     });
 
+    // Create ChainService
+    let chain_service = ChainService::new(store.clone(), clock.clone());
     let chain_handle = task::spawn(async move {
-        let mut tick_interval = interval(Duration::from_millis(1000));
-        let mut last_logged_slot = 0u64;
-        let mut last_status_slot: Option<u64> = None;
-        let mut last_proposal_slot: Option<u64> = None;
-        let mut last_attestation_slot: Option<u64> = None;
+        if let Err(err) = chain_service.run().await {
+            error!("ChainService failed: {err:?}");
+        }
+    });
 
+    // Create ValidatorService if configured
+    let validator_handle = if let Some((config, key_manager)) = validator_config_and_keys {
+        let validator_service = ValidatorService::new(
+            config,
+            num_validators,
+            store.clone(),
+            clock.clone(),
+            outbound_p2p_sender.clone(),
+            key_manager,
+        );
+        Some(task::spawn(async move {
+            if let Err(err) = validator_service.run().await {
+                error!("ValidatorService failed: {err:?}");
+            }
+        }))
+    } else {
+        None
+    };
+
+    // Spawn message processing task
+    let message_handle = task::spawn(async move {
         let peer_count = peer_count_for_status;
-        let mut store = store;
 
         loop {
             tokio::select! {
-                _ = tick_interval.tick() => {
-                    let now = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs();
-                    on_tick(&mut store, now, false);
-
-                    let current_slot = store.time / INTERVALS_PER_SLOT;
-                    let current_interval = store.time % INTERVALS_PER_SLOT;
-
-                    if last_status_slot != Some(current_slot) {
-                        let peers = peer_count.load(Ordering::Relaxed);
-                        print_chain_status(&store, peers);
-                        last_status_slot = Some(current_slot);
-                    }
-
-                    match current_interval {
-                        0 => {
-                            if let Some(ref vs) = validator_service {
-                                if last_proposal_slot != Some(current_slot) {
-                                    if let Some(proposer_idx) = vs.get_proposer_for_slot(Slot(current_slot)) {
-                                        info!(
-                                            slot = current_slot,
-                                            proposer = proposer_idx,
-                                            "Our turn to propose block!"
-                                        );
-
-                                        match vs.build_block_proposal(&mut store, Slot(current_slot), proposer_idx) {
-                                            Ok(signed_block) => {
-                                                let block_root = signed_block.message.block.hash_tree_root();
-                                                info!(
-                                                    slot = current_slot,
-                                                    block_root = %format!("0x{:x}", block_root),
-                                                    "Built block, processing and gossiping"
-                                                );
-
-                                                // Synchronize store time with wall clock before processing own block
-                                                let now = SystemTime::now()
-                                                    .duration_since(UNIX_EPOCH)
-                                                    .unwrap()
-                                                    .as_secs();
-                                                on_tick(&mut store, now, false);
-
-                                                match on_block(&mut store, signed_block.clone()) {
-                                                    Ok(()) => {
-                                                        info!("Own block processed successfully");
-                                                        // GOSSIP TO NETWORK
-                                                        if let Err(e) = chain_outbound_sender.send(
-                                                            OutboundP2pRequest::GossipBlockWithAttestation(signed_block)
-                                                        ) {
-                                                            warn!("Failed to gossip our block: {}", e);
-                                                        }
-                                                    }
-                                                    Err(e) => warn!("Failed to process our own block: {}", e),
-                                                }
-                                            }
-                                            Err(e) => warn!("Failed to build block proposal: {}", e),
-                                        }
-                                        last_proposal_slot = Some(current_slot);
-                                    }
-                                }
-                            }
-                        }
-                        1 => {
-                            if let Some(ref vs) = validator_service {
-                                if last_attestation_slot != Some(current_slot) {
-                                    let attestations = vs.create_attestations(&store, Slot(current_slot));
-                                    for signed_att in attestations {
-                                        let validator_id = signed_att.validator_id;
-                                        info!(
-                                            slot = current_slot,
-                                            validator = validator_id,
-                                            "Broadcasting attestation"
-                                        );
-
-                                        match on_attestation(&mut store, signed_att.clone(), false) {
-                                            Ok(()) => {
-                                                if let Err(e) = chain_outbound_sender.send(
-                                                    OutboundP2pRequest::GossipAttestation(signed_att)
-                                                ) {
-                                                    warn!("Failed to gossip attestation: {}", e);
-                                                }
-                                            }
-                                            Err(e) => warn!("Error processing own attestation: {}", e),
-                                        }
-                                    }
-                                    last_attestation_slot = Some(current_slot);
-                                }
-                            }
-                        }
-                        2 => {
-                            info!(slot = current_slot, tick = store.time, "Computing safe target");
-                        }
-                        3 => {
-                            info!(slot = current_slot, tick = store.time, "Accepting new attestations");
-                        }
-                        _ => {}
-                    }
-
-                    if current_slot != last_logged_slot && current_slot % 10 == 0 {
-                        debug!("(Okay)Store time updated : slot {}, pending blocks: {}",
-                            current_slot,
-                            store.blocks_queue.values().map(|v| v.len()).sum::<usize>()
-                        );
-                        last_logged_slot = current_slot;
-                    }
+                // Print status periodically
+                _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {
+                    let store_read = store.read().expect("Store lock poisoned");
+                    let peers = peer_count.load(Ordering::Relaxed);
+                    print_chain_status(&store_read, peers);
                 }
+
+                // Process incoming network messages
                 message = chain_message_receiver.recv() => {
                     let Some(message) = message else { break };
                     match message {
@@ -518,18 +447,16 @@ async fn main() -> Result<()> {
                             info!(
                                 slot = block_slot.0,
                                 block_root = %format!("0x{:x}", block_root),
-                                "Processing block built by Validator {}",
+                                "Processing block from Validator {}",
                                 proposer
                             );
 
-                            // Synchronize store time with wall clock before processing block
-                            let now = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap()
-                                .as_secs();
-                            on_tick(&mut store, now, false);
+                            let result = {
+                                let mut store_write = store.write().expect("Store lock poisoned");
+                                on_block(&mut store_write, signed_block_with_attestation.clone())
+                            };
 
-                            match on_block(&mut store, signed_block_with_attestation.clone()) {
+                            match result {
                                 Ok(()) => {
                                     info!("Block processed successfully");
 
@@ -574,11 +501,16 @@ async fn main() -> Result<()> {
                                 slot = att_slot,
                                 source_slot = source_slot,
                                 target_slot = target_slot,
-                                "Processing attestation by Validator {}",
+                                "Processing attestation from Validator {}",
                                 validator_id
                             );
 
-                            match on_attestation(&mut store, signed_attestation.clone(), false) {
+                            let result = {
+                                let mut store_write = store.write().expect("Store lock poisoned");
+                                on_attestation(&mut store_write, signed_attestation.clone(), false)
+                            };
+
+                            match result {
                                 Ok(()) => {
                                     if should_gossip {
                                         if let Err(e) = outbound_p2p_sender.send(
@@ -599,19 +531,30 @@ async fn main() -> Result<()> {
         }
     });
 
+    // Wait for any service to finish (which would be an error condition)
     tokio::select! {
         _ = network_handle => {
-            info!("Network service finished.");
+            info!("Network service finished");
         }
         _ = chain_handle => {
-            info!("Chain service finished.");
+            info!("Chain service finished");
+        }
+        _ = message_handle => {
+            info!("Message processing finished");
         }
         _ = http_handle => {
-            info!("Http service finished.");
+            info!("HTTP service finished");
+        }
+        _ = async {
+            if let Some(handle) = validator_handle {
+                handle.await.ok();
+            }
+        } => {
+            info!("Validator service finished");
         }
     }
 
-    info!("Main async task exiting...");
+    info!("Main async task exiting");
 
     Ok(())
 }

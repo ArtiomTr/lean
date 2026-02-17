@@ -929,6 +929,12 @@ dependencies = [
 [[package]]
 name = "chain"
 version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "fork_choice",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "chrono"
@@ -5170,11 +5176,16 @@ name = "runtime"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "bls",
+ "containers",
  "enum-iterator",
  "fork_choice",
+ "ssz",
  "strum",
  "tokio",
  "tokio-stream",
+ "tracing",
+ "xmss",
 ]
 
 [[package]]
@@ -6526,13 +6537,16 @@ name = "validator"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "chain",
  "containers",
  "env-config",
  "ethereum-types",
  "fork_choice",
  "metrics",
+ "networking",
  "serde_yaml",
  "ssz",
+ "tokio",
  "tracing",
  "typenum",
  "xmss",
