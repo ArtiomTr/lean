@@ -5,7 +5,7 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Error, Result, anyhow};
 use enum_iterator::Sequence;
 use strum::FromRepr;
 use tokio::{sync::mpsc, time::Instant};
@@ -150,8 +150,20 @@ impl EventSource for SystemClock {
     fn run(
         &mut self,
         tx: mpsc::UnboundedSender<Self::Event>,
-        rx: mpsc::UnboundedReceiver<Self::Effect>,
-    ) {
+        _: mpsc::UnboundedReceiver<Self::Effect>,
+    ) -> Result<()> {
+        let mut ticks = self.ticks()?;
+
+        tokio::spawn(async move {
+            while let Some(tick) = ticks.next().await {
+                let tick = tick?;
+                tx.send(tick)?;
+            }
+
+            Ok::<_, Error>(())
+        });
+
+        Ok(())
     }
 }
 

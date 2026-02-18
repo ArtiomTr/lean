@@ -5,11 +5,12 @@
 //! - **Event**: From EventSources (non-deterministic external world) into Services.
 //! - **Effect**: From Services to EventSources (requests to the external world).
 
+use anyhow::Result;
 use containers::{SignedAttestation, SignedBlockWithAttestation};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::Span;
 
-use crate::clock::Tick;
+use crate::{chain::ChainMessage, clock::Tick, validator::ValidatorMessage};
 
 /// Events from non-deterministic sources (EventSources).
 ///
@@ -26,6 +27,12 @@ pub struct SpannedEvent {
     event: Event,
 }
 
+#[derive(Debug, Clone)]
+pub enum Message {
+    Validator(ValidatorMessage),
+    Chain(ChainMessage),
+}
+
 impl SpannedEvent {
     pub fn new(span: Span, event: Event) -> Self {
         Self { span, event }
@@ -35,6 +42,7 @@ impl SpannedEvent {
 /// Effects produced by Services for EventSources to execute.
 ///
 /// Represent side-effects the deterministic core cannot perform itself.
+#[derive(Debug, Clone)]
 pub enum Effect {
     /// Gossip a signed block with proposer attestation to the network.
     GossipBlock(SignedBlockWithAttestation),
@@ -50,10 +58,13 @@ pub enum ServiceInput<T> {
 }
 
 #[derive(Debug, Clone)]
-pub struct ServiceOutput {}
+pub struct ServiceOutput {
+    messages: Vec<Message>,
+    effects: Vec<Effect>,
+}
 
 pub trait Service {
-    type Message;
+    type Message: 'static + Send;
 
     fn handle_input(&mut self, input: ServiceInput<Self::Message>) -> ServiceOutput;
 }
@@ -66,5 +77,5 @@ pub trait EventSource {
         &mut self,
         tx: mpsc::UnboundedSender<Self::Event>,
         rx: mpsc::UnboundedReceiver<Self::Effect>,
-    );
+    ) -> Result<()>;
 }

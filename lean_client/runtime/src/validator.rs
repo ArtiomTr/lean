@@ -29,6 +29,7 @@ use xmss::{SecretKey, Signature};
 use crate::{chain::ChainMessage, clock::Interval};
 
 /// Messages that ValidatorService receives (input to the state machine).
+#[derive(Debug, Clone)]
 pub enum ValidatorMessage {
     /// ChainService → ValidatorService: store state after a tick.
     ///

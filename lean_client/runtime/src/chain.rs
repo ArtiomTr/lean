@@ -13,22 +13,20 @@
 //! It also handles requests from other services (block production, attestation
 //! processing) since it is the sole owner of the Store.
 
-use containers::{
-    AttestationData, Checkpoint, SignedAttestation, Slot,
-};
+use containers::{AttestationData, Checkpoint, SignedAttestation, Slot};
 use fork_choice::{
     handlers::{on_attestation, on_tick},
-    store::{Store, SECONDS_PER_INTERVAL, SECONDS_PER_SLOT, get_vote_target, produce_block_with_signatures},
+    store::{
+        SECONDS_PER_INTERVAL, SECONDS_PER_SLOT, Store, get_vote_target,
+        produce_block_with_signatures,
+    },
 };
 use tracing::{debug, info, warn};
 
-use crate::{
-    clock::Tick,
-    event::Event,
-    validator::ValidatorMessage,
-};
+use crate::{clock::Tick, simulation::Service, validator::ValidatorMessage};
 
 /// Messages that ChainService receives (input to the state machine).
+#[derive(Debug, Clone)]
 pub enum ChainMessage {
     /// ValidatorService → ChainService: request block production.
     ProduceBlock { slot: Slot, proposer_idx: u64 },
@@ -173,5 +171,16 @@ impl ChainService {
             target,
             source,
         }
+    }
+}
+
+impl Service for ChainService {
+    type Message = ChainMessage;
+
+    fn handle_input(
+        &mut self,
+        input: crate::simulation::ServiceInput<Self::Message>,
+    ) -> crate::simulation::ServiceOutput {
+        todo!()
     }
 }
