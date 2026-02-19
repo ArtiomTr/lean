@@ -129,8 +129,7 @@ impl DeterministicSimulator {
         self.chain_queue
             .push_back(ServiceInput::Event(event.clone()));
         if self.validator.is_some() {
-            self.validator_queue
-                .push_back(ServiceInput::Event(event));
+            self.validator_queue.push_back(ServiceInput::Event(event));
         }
     }
 
@@ -150,7 +149,10 @@ impl DeterministicSimulator {
 
         let out = match service_id {
             ServiceId::Chain => {
-                let item = self.chain_queue.pop_front().expect("non-empty by decisions()");
+                let item = self
+                    .chain_queue
+                    .pop_front()
+                    .expect("non-empty by decisions()");
                 self.chain.handle_input(item)
             }
             ServiceId::Validator => {

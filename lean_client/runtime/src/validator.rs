@@ -307,6 +307,12 @@ impl Service for ValidatorService {
             }
 
             // All other inputs: nothing to do.
+            //
+            // This covers:
+            // - `Event::Tick` at intervals other than BlockProposal and AttestationBroadcast.
+            // - `Event::Network` — validators do not act on raw network events;
+            //   the ChainService integrates them into the store first.
+            // - `ValidatorMessage::SlotData` at intervals we don't act on.
             ServiceInput::Event(_) | ServiceInput::Message(ValidatorMessage::SlotData { .. }) => {
                 ServiceOutput::none()
             }

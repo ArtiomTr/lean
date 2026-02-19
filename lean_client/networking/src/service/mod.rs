@@ -1,8 +1,10 @@
+pub mod api_types;
+pub mod behaviour;
+
 use std::{
     collections::HashMap,
     fs::File,
     io,
-    net::IpAddr,
     num::{NonZeroU8, NonZeroUsize},
     sync::{
         Arc,
@@ -17,10 +19,10 @@ use futures::StreamExt;
 use libp2p::{
     Multiaddr, SwarmBuilder,
     connection_limits::{self, ConnectionLimits},
-    gossipsub::{Event, IdentTopic, MessageAuthenticity},
+    gossipsub::{Event as GossipsubEvent, IdentTopic, MessageAuthenticity},
     identify,
     multiaddr::Protocol,
-    swarm::{Config, ConnectionError, Swarm, SwarmEvent},
+    swarm::{Config as SwarmConfig, ConnectionError, Swarm, SwarmEvent},
 };
 use libp2p_identity::{Keypair, PeerId};
 use metrics::{DisconnectReason, METRICS};
@@ -33,36 +35,33 @@ use tokio::time::{Duration, MissedTickBehavior, interval};
 use tracing::{debug, info, trace, warn};
 
 use crate::{
-    bootnodes::{BootnodeSource, StaticBootnodes},
-    compressor::Compressor,
+    bootnodes::{Bootnode as CrateBootnode, BootnodeSource},
+    config::{Config, GossipsubConfig},
     discovery::{DiscoveryConfig, DiscoveryService},
-    enr_ext::EnrExt,
-    gossipsub::{self, config::GossipsubConfig, message::GossipsubMessage, topic::GossipsubKind},
-    network::behaviour::{LeanNetworkBehaviour, LeanNetworkBehaviourEvent},
-    req_resp::{self, BLOCKS_BY_ROOT_PROTOCOL_V1, LeanRequest, ReqRespMessage, STATUS_PROTOCOL_V1},
+    rpc::{self, LeanRequest, LeanResponse, RpcEvent},
     types::{
         ChainMessage, ChainMessageSink, ConnectionState, OutboundP2pRequest, P2pRequestSource,
+        pubsub::PubsubMessage, topics::GossipKind,
     },
 };
 
-#[derive(Debug, Clone)]
-pub struct NetworkServiceConfig {
-    pub gossipsub_config: GossipsubConfig,
-    pub socket_address: IpAddr,
-    pub socket_port: u16,
-    pub discovery_port: u16,
-    pub discovery_enabled: bool,
-    bootnodes: StaticBootnodes,
+use crate::discovery::enr_ext::EnrExt as _;
+use crate::service::behaviour::{Behaviour, BehaviourEvent, LeanGossipsub};
+
+pub mod config {
+    pub use crate::config::{Config, GossipsubConfig};
 }
+
+// ── Bootnode parsing ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, Display)]
 #[serde(untagged)]
-enum Bootnode {
+enum BootnodeArg {
     Multiaddr(Multiaddr),
     Enr(Enr),
 }
 
-impl Bootnode {
+impl BootnodeArg {
     fn addrs(&self) -> Vec<Multiaddr> {
         match self {
             Self::Multiaddr(addr) => vec![addr.clone()],
@@ -71,79 +70,56 @@ impl Bootnode {
     }
 }
 
-fn parse_bootnode_argument(arg: &str) -> Vec<Bootnode> {
-    if let Some(value) = arg.parse::<Multiaddr>().ok() {
-        return vec![Bootnode::Multiaddr(value)];
-    };
-
-    if let Some(rec) = arg.parse::<Enr>().ok() {
-        return vec![Bootnode::Enr(rec)];
+/// Parse a single bootnode argument string into zero or more `Bootnode` values.
+///
+/// The argument may be:
+/// - A multiaddr string (e.g. `/ip4/1.2.3.4/udp/9000/quic-v1/p2p/12D3…`)
+/// - An ENR string (e.g. `enr:-…`)
+/// - A path to a YAML file containing a list of the above
+pub fn parse_bootnode_arg(arg: &str) -> Vec<CrateBootnode> {
+    if let Ok(addr) = arg.parse::<Multiaddr>() {
+        return vec![CrateBootnode::Multiaddr(addr)];
     }
 
-    let Some(file) = File::open(&arg).ok() else {
+    if let Ok(enr) = arg.parse::<Enr>() {
+        return vec![CrateBootnode::Enr(enr)];
+    }
+
+    let Some(file) = File::open(arg).ok() else {
         warn!(
             "value {arg:?} provided as bootnode is not recognized - it is not valid multiaddr nor valid path to file containing bootnodes."
         );
-
         return Vec::new();
     };
 
-    let bootnodes: Vec<Bootnode> = match serde_yaml::from_reader(file) {
+    let raw_bootnodes: Vec<BootnodeArg> = match serde_yaml::from_reader(file) {
         Ok(value) => value,
         Err(err) => {
             warn!("failed to read bootnodes from {arg:?}: {err:?}");
-
             return Vec::new();
         }
     };
 
-    if bootnodes.is_empty() {
+    if raw_bootnodes.is_empty() {
         warn!("provided file with bootnodes {arg:?} is empty");
     }
 
-    bootnodes
+    raw_bootnodes
+        .into_iter()
+        .map(|b| match b {
+            BootnodeArg::Multiaddr(addr) => CrateBootnode::Multiaddr(addr),
+            BootnodeArg::Enr(enr) => CrateBootnode::Enr(enr),
+        })
+        .collect()
 }
 
-impl NetworkServiceConfig {
-    pub fn new(
-        gossipsub_config: GossipsubConfig,
-        socket_address: IpAddr,
-        socket_port: u16,
-        discovery_port: u16,
-        discovery_enabled: bool,
-        bootnodes: Vec<String>,
-    ) -> Self {
-        let bootnodes = StaticBootnodes::new(
-            bootnodes
-                .iter()
-                .flat_map(|addr_str| parse_bootnode_argument(&addr_str))
-                .map(|bootnode| {
-                    if bootnode.addrs().is_empty() {
-                        warn!("bootnode {bootnode} doesn't have valid address to dial");
-                    }
-                    match bootnode {
-                        Bootnode::Multiaddr(addr) => crate::bootnodes::Bootnode::Multiaddr(addr),
-                        Bootnode::Enr(enr) => crate::bootnodes::Bootnode::Enr(enr),
-                    }
-                })
-                .collect::<Vec<_>>(),
-        );
+// ── NetworkService ───────────────────────────────────────────────────────────
 
-        NetworkServiceConfig {
-            gossipsub_config,
-            socket_address,
-            socket_port,
-            discovery_port,
-            discovery_enabled,
-            bootnodes,
-        }
-    }
-
-    /// Get ENR bootnodes for discv5.
-    pub fn enr_bootnodes(&self) -> Vec<enr::Enr<discv5::enr::CombinedKey>> {
-        self.bootnodes.enrs().to_vec()
-    }
-}
+/// Lean-ethereum network service configuration.
+///
+/// This is the legacy config type kept for backward compatibility with
+/// callers that still use `NetworkServiceConfig`. New code should use `Config`.
+pub use crate::config::Config as NetworkServiceConfig;
 
 #[derive(Debug)]
 pub enum NetworkEvent {
@@ -156,13 +132,17 @@ pub enum NetworkEvent {
     DisconnectPeer(PeerId),
 }
 
+/// The main lean ethereum network service.
+///
+/// Mirrors eth2_libp2p's `Network` (formerly NetworkService) struct.
+/// Owns the libp2p Swarm, discovery service, and message routing.
 pub struct NetworkService<R, S>
 where
     R: P2pRequestSource<OutboundP2pRequest> + Send + 'static,
     S: ChainMessageSink<ChainMessage> + Send + 'static,
 {
     network_config: Arc<NetworkServiceConfig>,
-    swarm: Swarm<LeanNetworkBehaviour>,
+    swarm: Swarm<Behaviour>,
     discovery: Option<DiscoveryService>,
     peer_table: Arc<Mutex<HashMap<PeerId, ConnectionState>>>,
     peer_count: Arc<AtomicU64>,
@@ -215,7 +195,7 @@ where
     ) -> Result<Self> {
         let behaviour = Self::build_behaviour(&local_key, &network_config)?;
 
-        let config = Config::with_tokio_executor()
+        let config = SwarmConfig::with_tokio_executor()
             .with_notify_handler_buffer_size(NonZeroUsize::new(7).unwrap())
             .with_per_connection_event_buffer_size(4)
             .with_dial_concurrency_factor(NonZeroU8::new(1).unwrap());
@@ -271,21 +251,18 @@ where
     }
 
     pub async fn start(&mut self) -> Result<()> {
-        // Periodic reconnect attempts to bootnodes
         let mut reconnect_interval = interval(Duration::from_secs(30));
         reconnect_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-        // Periodic discovery searches
         let mut discovery_interval = interval(Duration::from_secs(30));
         discovery_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
             select! {
                 _ = reconnect_interval.tick() => {
-                    self.connect_to_peers(self.network_config.bootnodes.to_multiaddrs()).await;
+                    self.connect_to_peers(self.network_config.to_multiaddrs()).await;
                 }
                 _ = discovery_interval.tick() => {
-                    // Trigger active peer discovery
                     if let Some(ref discovery) = self.discovery {
                         let known_peers = discovery.connected_peers();
                         debug!(known_peers, "Triggering random peer discovery lookup");
@@ -325,24 +302,15 @@ where
 
     async fn parse_swarm_event(
         &mut self,
-        event: SwarmEvent<LeanNetworkBehaviourEvent>,
+        event: SwarmEvent<BehaviourEvent>,
     ) -> Option<NetworkEvent> {
         match event {
-            SwarmEvent::Behaviour(event) => {
-                match event {
-                    LeanNetworkBehaviourEvent::Gossipsub(event) => {
-                        self.handle_gossipsub_event(event).await
-                    }
-                    LeanNetworkBehaviourEvent::ReqResp(event) => {
-                        self.handle_request_response_event(event)
-                    }
-                    LeanNetworkBehaviourEvent::Identify(event) => self.handle_identify_event(event),
-                    LeanNetworkBehaviourEvent::ConnectionLimits(_) => {
-                        // ConnectionLimits behaviour has no events
-                        None
-                    }
-                }
-            }
+            SwarmEvent::Behaviour(event) => match event {
+                BehaviourEvent::Gossipsub(event) => self.handle_gossipsub_event(event).await,
+                BehaviourEvent::Rpc(event) => self.handle_request_response_event(event),
+                BehaviourEvent::Identify(event) => self.handle_identify_event(event),
+                BehaviourEvent::ConnectionLimits(_) => None,
+            },
             SwarmEvent::ConnectionEstablished {
                 peer_id, endpoint, ..
             } => {
@@ -402,7 +370,6 @@ where
                         },
                         Some(ConnectionError::KeepAliveTimeout) => DisconnectReason::Timeout,
                     };
-
                     metrics.register_peer_disconnect(endpoint.is_listener(), reason)
                 });
 
@@ -425,7 +392,6 @@ where
             }
             SwarmEvent::NewExternalAddrCandidate { address } => {
                 info!(?address, "New external address candidate");
-                // Optionally confirm it as an external address so other peers can reach us
                 self.swarm.add_external_address(address);
                 None
             }
@@ -443,20 +409,16 @@ where
                 ..
             } => {
                 warn!(?error, ?send_back_addr, "Incoming connection error");
-
                 METRICS
                     .get()
                     .map(|metrics| metrics.register_peer_connection_failure(true));
-
                 None
             }
             SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
                 warn!(?peer_id, ?error, "Failed to connect to peer");
-
                 METRICS
                     .get()
                     .map(|metrics| metrics.register_peer_connection_failure(false));
-
                 None
             }
             _ => {
@@ -466,20 +428,18 @@ where
         }
     }
 
-    async fn handle_gossipsub_event(&mut self, event: Event) -> Option<NetworkEvent> {
+    async fn handle_gossipsub_event(&mut self, event: GossipsubEvent) -> Option<NetworkEvent> {
         match event {
-            Event::Subscribed { peer_id, topic } => {
+            GossipsubEvent::Subscribed { peer_id, topic } => {
                 info!(peer = %peer_id, topic = %topic, "A peer subscribed to topic");
             }
-            Event::Unsubscribed { peer_id, topic } => {
+            GossipsubEvent::Unsubscribed { peer_id, topic } => {
                 info!(peer = %peer_id, topic = %topic, "A peer unsubscribed from topic");
             }
-
-            Event::Message { message, .. } => {
-                match GossipsubMessage::decode(&message.topic, &message.data) {
-                    Ok(GossipsubMessage::Block(signed_block_with_attestation)) => {
+            GossipsubEvent::Message { message, .. } => {
+                match PubsubMessage::decode(&message.topic, &message.data) {
+                    Ok(PubsubMessage::Block(signed_block_with_attestation)) => {
                         let slot = signed_block_with_attestation.message.block.slot.0;
-
                         if let Err(err) = self
                             .chain_message_sink
                             .send(ChainMessage::ProcessBlock {
@@ -494,13 +454,12 @@ where
                             );
                         }
                     }
-                    Ok(GossipsubMessage::Attestation(signed_attestation)) => {
+                    Ok(PubsubMessage::Attestation(signed_attestation)) => {
                         let slot = signed_attestation.message.slot.0;
-
                         if let Err(err) = self
                             .chain_message_sink
                             .send(ChainMessage::ProcessAttestation {
-                                signed_attestation: signed_attestation,
+                                signed_attestation,
                                 is_trusted: false,
                                 should_gossip: true,
                             })
@@ -521,61 +480,51 @@ where
         None
     }
 
-    fn handle_request_response_event(&mut self, event: ReqRespMessage) -> Option<NetworkEvent> {
-        use crate::req_resp::LeanResponse;
+    fn handle_request_response_event(&mut self, event: RpcEvent) -> Option<NetworkEvent> {
         use libp2p::request_response::{Event, Message};
 
         match event {
             Event::Message { peer, message, .. } => match message {
-                Message::Response { response, .. } => {
-                    match response {
-                        LeanResponse::BlocksByRoot(blocks) => {
-                            info!(
-                                peer = %peer,
-                                num_blocks = blocks.len(),
-                                "Received BlocksByRoot response"
-                            );
-
-                            // Feed received blocks back into chain processing
-                            let chain_sink = self.chain_message_sink.clone();
-                            tokio::spawn(async move {
-                                for block in blocks {
-                                    let slot = block.message.block.slot.0;
-                                    if let Err(e) = chain_sink
-                                        .send(ChainMessage::ProcessBlock {
-                                            signed_block_with_attestation: block,
-                                            is_trusted: false,
-                                            should_gossip: false, // Don't re-gossip requested blocks
-                                        })
-                                        .await
-                                    {
-                                        warn!(
-                                            slot = slot,
-                                            ?e,
-                                            "Failed to send requested block to chain"
-                                        );
-                                    } else {
-                                        debug!(
-                                            slot = slot,
-                                            "Queued requested block for processing"
-                                        );
-                                    }
+                Message::Response { response, .. } => match response {
+                    LeanResponse::BlocksByRoot(blocks) => {
+                        info!(
+                            peer = %peer,
+                            num_blocks = blocks.len(),
+                            "Received BlocksByRoot response"
+                        );
+                        let chain_sink = self.chain_message_sink.clone();
+                        tokio::spawn(async move {
+                            for block in blocks {
+                                let slot = block.message.block.slot.0;
+                                if let Err(e) = chain_sink
+                                    .send(ChainMessage::ProcessBlock {
+                                        signed_block_with_attestation: block,
+                                        is_trusted: false,
+                                        should_gossip: false,
+                                    })
+                                    .await
+                                {
+                                    warn!(
+                                        slot = slot,
+                                        ?e,
+                                        "Failed to send requested block to chain"
+                                    );
+                                } else {
+                                    debug!(slot = slot, "Queued requested block for processing");
                                 }
-                            });
-                        }
-                        LeanResponse::Status(_) => {
-                            info!(peer = %peer, "Received Status response");
-                        }
-                        LeanResponse::Empty => {
-                            warn!(peer = %peer, "Received empty response");
-                        }
+                            }
+                        });
                     }
-                }
+                    LeanResponse::Status(_) => {
+                        info!(peer = %peer, "Received Status response");
+                    }
+                    LeanResponse::Empty => {
+                        warn!(peer = %peer, "Received empty response");
+                    }
+                },
                 Message::Request {
                     request, channel, ..
                 } => {
-                    use crate::req_resp::{LeanRequest, LeanResponse};
-
                     let response = match request {
                         LeanRequest::Status(_) => {
                             info!(peer = %peer, "Received Status request");
@@ -583,16 +532,13 @@ where
                         }
                         LeanRequest::BlocksByRoot(roots) => {
                             info!(peer = %peer, num_roots = roots.len(), "Received BlocksByRoot request");
-                            // TODO: Lookup blocks from our store and return them
-                            // For now, return empty to prevent timeout
                             LeanResponse::BlocksByRoot(vec![])
                         }
                     };
-
                     if let Err(e) = self
                         .swarm
                         .behaviour_mut()
-                        .req_resp
+                        .rpc
                         .send_response(channel, response)
                     {
                         warn!(peer = %peer, ?e, "Failed to send response");
@@ -614,11 +560,7 @@ where
 
     fn handle_identify_event(&mut self, event: identify::Event) -> Option<NetworkEvent> {
         match event {
-            identify::Event::Received {
-                peer_id,
-                info,
-                connection_id: _,
-            } => {
+            identify::Event::Received { peer_id, info, .. } => {
                 info!(
                     peer = %peer_id,
                     agent_version = %info.agent_version,
@@ -627,13 +569,9 @@ where
                     protocols = info.protocols.len(),
                     "Received peer info"
                 );
-
                 None
             }
-            identify::Event::Sent {
-                peer_id,
-                connection_id: _,
-            } => {
+            identify::Event::Sent { peer_id, .. } => {
                 info!(peer = %peer_id, "Sent identify info");
                 None
             }
@@ -641,11 +579,7 @@ where
                 info!(peer = %peer_id, "Pushed identify update");
                 None
             }
-            identify::Event::Error {
-                peer_id,
-                error,
-                connection_id: _,
-            } => {
+            identify::Event::Error { peer_id, error, .. } => {
                 warn!(peer = %peer_id, ?error, "Identify error");
                 None
             }
@@ -704,7 +638,7 @@ where
                 let slot = signed_block_with_attestation.message.block.slot.0;
                 match signed_block_with_attestation.to_ssz() {
                     Ok(bytes) => {
-                        if let Err(err) = self.publish_to_topic(GossipsubKind::Block, bytes) {
+                        if let Err(err) = self.publish_to_topic(GossipKind::Block, bytes) {
                             warn!(slot = slot, ?err, "Publish block with attestation failed");
                         } else {
                             info!(slot = slot, "Broadcasted block with attestation");
@@ -717,10 +651,9 @@ where
             }
             OutboundP2pRequest::GossipAttestation(signed_attestation) => {
                 let slot = signed_attestation.message.slot.0;
-
                 match signed_attestation.to_ssz() {
                     Ok(bytes) => {
-                        if let Err(err) = self.publish_to_topic(GossipsubKind::Attestation, bytes) {
+                        if let Err(err) = self.publish_to_topic(GossipKind::Attestation, bytes) {
                             warn!(slot = slot, ?err, "Publish attestation failed");
                         } else {
                             info!(slot = slot, "Broadcasted attestation");
@@ -746,15 +679,13 @@ where
         }
     }
 
-    fn publish_to_topic(&mut self, kind: GossipsubKind, data: Vec<u8>) -> Result<()> {
+    fn publish_to_topic(&mut self, kind: GossipKind, data: Vec<u8>) -> Result<()> {
         let topic = self
             .network_config
-            .gossipsub_config
-            .topics
-            .iter()
+            .gossip_topics()
+            .into_iter()
             .find(|topic| topic.kind == kind)
-            .cloned()
-            .ok_or_else(|| anyhow!("Missing gossipsub topic for kind {kind:?}"))?;
+            .ok_or_else(|| anyhow!("Missing gossip topic for kind {kind:?}"))?;
 
         self.swarm
             .behaviour_mut()
@@ -776,19 +707,18 @@ where
         self.discovery.as_ref().map(|d| d.local_enr())
     }
 
-    pub fn swarm_mut(&mut self) -> &mut Swarm<LeanNetworkBehaviour> {
+    pub fn swarm_mut(&mut self) -> &mut Swarm<Behaviour> {
         &mut self.swarm
     }
 
     fn send_status_request(&mut self, peer_id: PeerId) {
         let status = containers::Status::default();
         let request = LeanRequest::Status(status);
-
         info!(peer = %peer_id, "Sending Status request for handshake");
         let _request_id = self
             .swarm
             .behaviour_mut()
-            .req_resp
+            .rpc
             .send_request(&peer_id, request);
     }
 
@@ -797,11 +727,11 @@ where
             return;
         }
 
-        if roots.len() > req_resp::MAX_REQUEST_BLOCKS {
+        if roots.len() > rpc::methods::MAX_REQUEST_BLOCKS {
             warn!(
                 peer = %peer_id,
                 requested = roots.len(),
-                max = req_resp::MAX_REQUEST_BLOCKS,
+                max = rpc::methods::MAX_REQUEST_BLOCKS,
                 "BlocksByRoot request exceeds MAX_REQUEST_BLOCKS"
             );
             return;
@@ -812,26 +742,21 @@ where
         let _request_id = self
             .swarm
             .behaviour_mut()
-            .req_resp
+            .rpc
             .send_request(&peer_id, request);
     }
 
-    fn build_behaviour(
-        local_key: &Keypair,
-        cfg: &NetworkServiceConfig,
-    ) -> Result<LeanNetworkBehaviour> {
+    fn build_behaviour(local_key: &Keypair, cfg: &NetworkServiceConfig) -> Result<Behaviour> {
         let identify = Self::build_identify(local_key);
-        let gossipsub = gossipsub::GossipsubBehaviour::new_with_transform(
+
+        let gossipsub = LeanGossipsub::new_with_transform(
             MessageAuthenticity::Anonymous,
-            cfg.gossipsub_config.config.clone(),
-            Compressor::default(),
+            cfg.gossipsub_config().config.clone(),
+            crate::types::pubsub::SnappyTransform::default(),
         )
         .map_err(|err| anyhow!("Failed to create gossipsub behaviour: {err:?}"))?;
 
-        let req_resp = req_resp::build(vec![
-            STATUS_PROTOCOL_V1.to_string(),
-            BLOCKS_BY_ROOT_PROTOCOL_V1.to_string(),
-        ]);
+        let rpc = rpc::build_rpc();
 
         let connection_limits = connection_limits::Behaviour::new(
             ConnectionLimits::default()
@@ -840,9 +765,9 @@ where
                 .with_max_established_per_peer(Some(2)),
         );
 
-        Ok(LeanNetworkBehaviour {
+        Ok(Behaviour {
             identify,
-            req_resp,
+            rpc,
             gossipsub,
             connection_limits,
         })
@@ -853,7 +778,6 @@ where
         let identify_config = identify::Config::new("eth2/1.0.0".into(), local_public_key.clone())
             .with_agent_version("0.0.1".to_string())
             .with_cache_size(0);
-
         identify::Behaviour::new(identify_config)
     }
 
@@ -873,7 +797,7 @@ where
     }
 
     fn subscribe_to_topics(&mut self) -> Result<()> {
-        for topic in &self.network_config.gossipsub_config.topics {
+        for topic in self.network_config.gossip_topics() {
             self.swarm
                 .behaviour_mut()
                 .gossipsub

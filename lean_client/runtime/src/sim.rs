@@ -1,17 +1,26 @@
+//! Real-time simulator: runs services and event sources on the tokio runtime.
+//!
+//! The `RealSimulator` wires together:
+//! - `SystemClock` (EventSource) — emits `Event::Tick` at each consensus interval.
+//! - `NetworkEventSource` (EventSource, optional) — emits `Event::Network` for
+//!   inbound gossip and consumes `Effect`s for outbound gossip and block requests.
+//! - `ChainService` (Service) — owns the fork choice store; processes ticks and
+//!   network events; handles block/attestation production requests from validators.
+//! - `ValidatorService` (Service, optional) — drives block proposals and attestations.
+//!
+//! Effects produced by services are forwarded to the appropriate EventSource.
+//! Currently all effects go to the `NetworkEventSource`; the clock has no effects.
+
 use anyhow::{Error, Result};
 use fork_choice::store::Store;
-
-use tokio::{
-    select,
-    sync::{broadcast, mpsc, oneshot},
-};
-use tokio_stream::StreamExt as _;
-use tracing::{Span, warn};
+use tokio::sync::mpsc;
+use tracing::warn;
 
 use crate::{
     chain::ChainService,
     clock::SystemClock,
-    simulation::{Effect, Event, EventSource, Message, Service, ServiceInput, SpannedEvent},
+    network::{NetworkConfig, NetworkEventSource},
+    simulation::{Effect, Event, EventSource, Message, Service, ServiceInput},
     validator::{KeyManager, ValidatorConfig, ValidatorService},
 };
 
@@ -20,6 +29,9 @@ pub struct RealSimulator {
     store: Store,
     validator_config: Option<ValidatorConfig>,
     key_manager: Option<KeyManager>,
+    /// Network configuration.  When `None`, the node runs without P2P networking
+    /// (useful for local testing or when the network is not yet configured).
+    network_config: Option<NetworkConfig>,
 }
 
 impl RealSimulator {
@@ -28,12 +40,14 @@ impl RealSimulator {
         store: Store,
         validator_config: Option<ValidatorConfig>,
         key_manager: Option<KeyManager>,
+        network_config: Option<NetworkConfig>,
     ) -> Result<Self> {
         Ok(Self {
             clock: SystemClock::new(genesis)?,
             store,
             validator_config,
             key_manager,
+            network_config,
         })
     }
 
@@ -43,7 +57,8 @@ impl RealSimulator {
             .build()?;
 
         runtime.block_on(async move {
-            self.execute().await;
+            // Errors are logged inside `execute` itself via tracing.
+            self.execute().await.ok();
         });
 
         Ok(())
@@ -59,13 +74,15 @@ impl RealSimulator {
         tokio::task::spawn(async move {
             while let Some(event) = temp_rx.recv().await {
                 let event = map_event(event);
-                tx.send(event);
+                // Ignore send errors: the event loop has exited.
+                tx.send(event).ok();
             }
         });
 
         let (out_tx, out_rx) = mpsc::unbounded_channel();
 
-        source.run(temp_tx, out_rx);
+        // Errors are logged inside the EventSource itself.
+        source.run(temp_tx, out_rx).ok();
 
         out_tx
     }
@@ -82,11 +99,12 @@ impl RealSimulator {
                 let output = service.handle_input(input);
 
                 for message in output.messages {
-                    message_tx.send(message);
+                    // Ignore send errors: the router task has exited.
+                    message_tx.send(message).ok();
                 }
 
                 for effect in output.effects {
-                    effect_tx.send(effect);
+                    effect_tx.send(effect).ok();
                 }
             }
         });
@@ -95,10 +113,22 @@ impl RealSimulator {
     }
 
     async fn execute(self) -> Result<()> {
-        // Event broadcast channel - EventSources publish Events here
+        // Event broadcast channel — EventSources publish Events here.
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
 
-        Self::spawn_event_source(self.clock, event_tx, |event| Event::Tick(event));
+        // Clock: always present — drives slot/interval ticks.
+        Self::spawn_event_source(self.clock, event_tx.clone(), Event::Tick);
+
+        // Network: optional — emits inbound blocks/attestations, consumes effects.
+        // We keep the effect sender so we can route Effects to the network later.
+        let network_effect_tx: Option<mpsc::UnboundedSender<Effect>> =
+            self.network_config.map(|cfg| {
+                Self::spawn_event_source(
+                    NetworkEventSource::new(cfg),
+                    event_tx.clone(),
+                    Event::Network,
+                )
+            });
 
         let (message_tx, mut message_rx) = mpsc::unbounded_channel();
         let (effect_tx, mut effect_rx) = mpsc::unbounded_channel();
@@ -110,12 +140,11 @@ impl RealSimulator {
         );
         let validator_mailbox = self
             .validator_config
-            .and_then(|config| {
-                self.key_manager
-                    .map(|manager| ValidatorService::new(config, manager))
-            })
+            .zip(self.key_manager)
+            .map(|(config, manager)| ValidatorService::new(config, manager))
             .map(|service| Self::spawn_service(service, message_tx.clone(), effect_tx.clone()));
 
+        // Route inter-service Messages to the correct service mailbox.
         {
             let chain_mailbox = chain_mailbox.clone();
             let validator_mailbox = validator_mailbox.clone();
@@ -138,34 +167,31 @@ impl RealSimulator {
             });
         }
 
+        // Broadcast Events from all EventSources to all Services.
         tokio::spawn(async move {
             while let Some(event) = event_rx.recv().await {
-                chain_mailbox.send(ServiceInput::Event(event.clone()));
-                validator_mailbox
-                    .as_ref()
-                    .map(|mb| mb.send(ServiceInput::Event(event)));
+                chain_mailbox.send(ServiceInput::Event(event.clone())).ok();
+                if let Some(ref mb) = validator_mailbox {
+                    mb.send(ServiceInput::Event(event)).ok();
+                }
             }
         });
 
+        // Route Effects to the EventSource that handles them.
+        //
+        // Currently all effects are network effects; the clock has no effects.
+        // If `network_effect_tx` is `None` (no networking configured), effects
+        // are silently discarded.
         tokio::spawn(async move {
-            while let Some(event) = effect_rx.recv().await {
-                // TODO: when some effects will be created, move them here
+            while let Some(effect) = effect_rx.recv().await {
+                if let Some(ref tx) = network_effect_tx {
+                    if tx.send(effect).is_err() {
+                        break;
+                    }
+                }
             }
         });
 
         Ok(())
-    }
-
-    async fn execute_effect(effect: Effect) -> Result<()> {
-        match effect {
-            Effect::GossipBlock(_block) => {
-                // Send to network service when implemented
-                Ok(())
-            }
-            Effect::GossipAttestation(_attestation) => {
-                // Send to network service when implemented
-                Ok(())
-            }
-        }
     }
 }

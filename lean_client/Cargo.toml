@@ -228,6 +228,7 @@ fork_choice = { path = "./fork_choice" }
 http_api = { path = "./http_api" }
 metrics = { path = "./metrics" }
 networking = { path = "./networking" }
+runtime = { path = "./runtime" }
 validator = { path = "./validator" }
 xmss = { path = "./xmss" }
 
@@ -316,6 +317,7 @@ http_api = { workspace = true }
 libp2p-identity = { workspace = true }
 metrics = { workspace = true }
 networking = { workspace = true }
+runtime = { workspace = true }
 ssz = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

@@ -1,5 +1,5 @@
-use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
 use chain::SlotClock;
@@ -15,7 +15,7 @@ use metrics::METRICS;
 use networking::types::OutboundP2pRequest;
 use ssz::SszHash;
 use tokio::sync::mpsc;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tracing::{debug, info, warn};
 use xmss::Signature;
 
@@ -195,7 +195,11 @@ impl ValidatorService {
             return;
         }
 
-        info!(slot = slot, proposer = proposer_index, "Our turn to propose");
+        info!(
+            slot = slot,
+            proposer = proposer_index,
+            "Our turn to propose"
+        );
 
         // Produce the block
         let signed_block = {
@@ -205,7 +209,9 @@ impl ValidatorService {
                 Ok((block_root, block, signatures)) => {
                     // Create proposer attestation
                     let proposer_attestation_data = get_vote_target(&store);
-                    let head_block = store.blocks.get(&store.head)
+                    let head_block = store
+                        .blocks
+                        .get(&store.head)
                         .expect("Head block must exist");
                     let head_checkpoint = Checkpoint {
                         root: store.head,
@@ -425,7 +431,11 @@ impl ValidatorService {
 
             match key_manager.sign(validator_index, epoch, message) {
                 Ok(sig) => {
-                    debug!(validator = validator_index, slot = slot, "Signed attestation");
+                    debug!(
+                        validator = validator_index,
+                        slot = slot,
+                        "Signed attestation"
+                    );
                     sig
                 }
                 Err(e) => {

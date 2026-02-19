@@ -11,7 +11,7 @@ use strum::FromRepr;
 use tokio::{sync::mpsc, time::Instant};
 use tokio_stream::{Stream, StreamExt, wrappers::IntervalStream};
 
-use crate::simulation::{EventSource, Service};
+use crate::simulation::EventSource;
 
 /// NOTE: if this ever becomes a fractional number of seconds (i.e. 2.5, 0.5,
 /// etc.), don't forget to update `current_slot` functionality too.

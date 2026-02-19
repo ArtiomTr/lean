@@ -1,8 +1,14 @@
-use std::{collections::HashMap, fmt::Display};
+pub mod globals;
+pub mod pubsub;
+pub mod topics;
+
+use std::collections::HashMap;
+use std::fmt::Display;
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use containers::{SignedAttestation, SignedBlockWithAttestation};
+use libp2p_identity::PeerId;
 use metrics::METRICS;
 use serde::{Deserialize, Serialize};
 use ssz::H256;
@@ -11,55 +17,33 @@ use tracing::warn;
 
 use crate::serde_utils::quoted_u64;
 
-/// 1-byte domain for gossip message-id isolation of valid snappy messages.
-/// Per leanSpec, prepended to the message hash when decompression succeeds.
-pub const MESSAGE_DOMAIN_VALID_SNAPPY: &[u8; 1] = &[0x01];
+// Re-export domain constants for backward compat
+pub use crate::config::{MESSAGE_DOMAIN_INVALID_SNAPPY, MESSAGE_DOMAIN_VALID_SNAPPY};
 
-/// 1-byte domain for gossip message-id isolation of invalid snappy messages.
-/// Per leanSpec, prepended to the message hash when decompression fails.
-pub const MESSAGE_DOMAIN_INVALID_SNAPPY: &[u8; 1] = &[0x00];
-
-/// Peer connection state machine per leanSpec.
-///
-/// Tracks the lifecycle of a connection to a peer:
-/// DISCONNECTED -> CONNECTING -> CONNECTED -> DISCONNECTING -> DISCONNECTED
-///
-/// These states map directly to libp2p connection events.
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum ConnectionState {
-    /// No active connection to this peer.
     Disconnected,
-    /// TCP/QUIC connection in progress.
     Connecting,
-    /// Transport established, can exchange protocol messages.
     Connected,
-    /// Graceful shutdown in progress (Goodbye sent/received).
     Disconnecting,
 }
 
-/// Reason codes for the Goodbye request/response message per leanSpec.
-///
-/// Sent when gracefully disconnecting from a peer to indicate why
-/// the connection is being closed.
-///
-/// Official codes (from spec):
-/// - 1: Client shutdown
-/// - 2: Irrelevant network
-/// - 3: Fault/error
+impl Default for ConnectionState {
+    fn default() -> Self {
+        ConnectionState::Disconnected
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(u64)]
 pub enum GoodbyeReason {
-    /// Node is shutting down normally.
     ClientShutdown = 1,
-    /// Peer is on a different fork or network.
     IrrelevantNetwork = 2,
-    /// Generic error detected in peer communication.
     FaultOrError = 3,
 }
 
 impl GoodbyeReason {
-    /// Convert from u64 code to GoodbyeReason.
     pub fn from_code(code: u64) -> Option<Self> {
         match code {
             1 => Some(GoodbyeReason::ClientShutdown),
@@ -69,7 +53,6 @@ impl GoodbyeReason {
         }
     }
 
-    /// Get the u64 code for this reason.
     pub fn code(&self) -> u64 {
         *self as u64
     }
@@ -96,7 +79,7 @@ pub struct PeerCount {
 }
 
 impl PeerCount {
-    pub fn new(states: &HashMap<libp2p_identity::PeerId, ConnectionState>) -> Self {
+    pub fn new(states: &HashMap<PeerId, ConnectionState>) -> Self {
         let mut count = PeerCount::default();
         for state in states.values() {
             match state {
@@ -109,11 +92,9 @@ impl PeerCount {
 
         METRICS.get().map(|metrics| {
             let Ok(connected) = count.connected.try_into() else {
-                warn!("failed to set connected pear count metric");
+                warn!("failed to set connected peer count metric");
                 return;
             };
-
-            // TODO(metrics): actual client names should be provided into with_label_values
             metrics
                 .lean_connected_peers
                 .with_label_values(&["unknown"])

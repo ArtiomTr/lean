@@ -12,10 +12,19 @@
 //!
 //! It also handles requests from other services (block production, attestation
 //! processing) since it is the sole owner of the Store.
+//!
+//! ## Network events
+//!
+//! When blocks or attestations arrive from the P2P network (`Event::Network`),
+//! `ChainService` inserts them into the fork choice store. If a block's parent
+//! is not yet in the store, it emits `Effect::RequestBlocksByRoot` so the
+//! `NetworkEventSource` can fetch the missing ancestor from peers.
 
-use containers::{AttestationData, Checkpoint, SignedAttestation, Slot};
+use containers::{
+    AttestationData, Checkpoint, SignedAttestation, SignedBlockWithAttestation, Slot,
+};
 use fork_choice::{
-    handlers::{on_attestation, on_tick},
+    handlers::{on_attestation, on_block, on_tick},
     store::{
         SECONDS_PER_INTERVAL, SECONDS_PER_SLOT, Store, get_vote_target,
         produce_block_with_signatures,
@@ -25,7 +34,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     clock::{Interval, Tick},
-    simulation::{Event, Service, ServiceInput, ServiceOutput},
+    simulation::{Effect, Event, NetworkEvent, Service, ServiceInput, ServiceOutput},
     validator::ValidatorMessage,
 };
 
@@ -80,6 +89,54 @@ impl ChainService {
             source: self.store.latest_justified.clone(),
         }
     }
+
+    /// Process a block from the network and return any required effects.
+    ///
+    /// On success, the block is inserted into the fork choice store.
+    /// When the parent block is unknown, emits `Effect::RequestBlocksByRoot`
+    /// so the missing ancestor can be fetched from peers.
+    fn process_network_block(&mut self, signed_block: SignedBlockWithAttestation) -> ServiceOutput {
+        let slot = signed_block.message.block.slot.0;
+        let parent_root = signed_block.message.block.parent_root;
+
+        match on_block(&mut self.store, signed_block) {
+            Ok(()) => {
+                info!(slot, "Network block processed");
+                ServiceOutput::none()
+            }
+            Err(err) => {
+                let err_str = format!("{err:?}");
+                if err_str.contains("Block queued") {
+                    // Parent not yet in the store — ask the network for it.
+                    debug!(
+                        slot,
+                        parent_root = %format_args!("0x{parent_root:x}"),
+                        "Block queued awaiting parent; requesting from peers",
+                    );
+
+                    if parent_root.is_zero() {
+                        // Genesis parent — no-one to ask.
+                        return ServiceOutput::none();
+                    }
+
+                    ServiceOutput::none()
+                        .with_effect(Effect::RequestBlocksByRoot(vec![parent_root]))
+                } else {
+                    warn!(%err, slot, "Failed to process network block");
+                    ServiceOutput::none()
+                }
+            }
+        }
+    }
+
+    /// Process an attestation from the network.
+    fn process_network_attestation(&mut self, attestation: SignedAttestation) -> ServiceOutput {
+        let validator_id = attestation.validator_id;
+        if let Err(err) = on_attestation(&mut self.store, attestation, false) {
+            warn!(%err, validator = validator_id, "Failed to process network attestation");
+        }
+        ServiceOutput::none()
+    }
 }
 
 impl Service for ChainService {
@@ -102,6 +159,21 @@ impl Service for ChainService {
                 debug!(slot, interval = ?interval, store_time = self.store.time, "Chain tick processed");
 
                 ServiceOutput::none()
+            }
+
+            // ── Network block flow ───────────────────────────────────────────
+            //
+            // A peer gossiped a block. Insert it into fork choice. If the parent
+            // is unknown, request it from the network.
+            ServiceInput::Event(Event::Network(NetworkEvent::BlockReceived(signed_block))) => {
+                self.process_network_block(signed_block)
+            }
+
+            // ── Network attestation flow ─────────────────────────────────────
+            //
+            // A peer gossiped an attestation. Feed it into fork choice.
+            ServiceInput::Event(Event::Network(NetworkEvent::AttestationReceived(attestation))) => {
+                self.process_network_attestation(attestation)
             }
 
             // ── GetSlotData flow ─────────────────────────────────────────────

@@ -1,3 +1,5 @@
+pub mod enr_ext;
+
 pub mod config;
 
 #[cfg(test)]
@@ -16,7 +18,7 @@ use libp2p_identity::{Keypair, PeerId};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-use crate::enr_ext::EnrExt;
+use crate::discovery::enr_ext::EnrExt;
 
 pub use config::DiscoveryConfig;
 

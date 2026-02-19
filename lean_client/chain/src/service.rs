@@ -1,9 +1,9 @@
-use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
 use fork_choice::{handlers::on_tick, store::Store};
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 use tracing::{debug, info};
 
 use crate::clock::SlotClock;

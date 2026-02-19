@@ -8,10 +8,23 @@
 use anyhow::Result;
 use containers::{SignedAttestation, SignedBlockWithAttestation};
 use smallvec::SmallVec;
-use tokio::sync::{broadcast, mpsc, oneshot};
+use ssz::H256;
+use tokio::sync::mpsc;
 use tracing::Span;
 
 use crate::{chain::ChainMessage, clock::Tick, validator::ValidatorMessage};
+
+/// A block or attestation received from the P2P network.
+///
+/// Emitted by `NetworkEventSource` when a peer gossips a block or attestation,
+/// or when a block-by-root response is received.
+#[derive(Debug, Clone)]
+pub enum NetworkEvent {
+    /// A signed block with proposer attestation received from a peer.
+    BlockReceived(SignedBlockWithAttestation),
+    /// A signed attestation received from a peer.
+    AttestationReceived(SignedAttestation),
+}
 
 /// Events from non-deterministic sources (EventSources).
 ///
@@ -20,6 +33,8 @@ use crate::{chain::ChainMessage, clock::Tick, validator::ValidatorMessage};
 pub enum Event {
     /// A clock tick at a specific slot and interval.
     Tick(Tick),
+    /// A block or attestation arrived from the P2P network.
+    Network(NetworkEvent),
 }
 
 #[derive(Debug, Clone)]
@@ -50,6 +65,12 @@ pub enum Effect {
 
     /// Gossip a signed attestation to the network.
     GossipAttestation(SignedAttestation),
+
+    /// Request blocks by root hash from connected peers.
+    ///
+    /// Emitted by `ChainService` when a received block references an unknown parent.
+    /// The `NetworkEventSource` handles this by sending a `BlocksByRoot` request to a peer.
+    RequestBlocksByRoot(Vec<H256>),
 }
 
 #[derive(Debug, Clone)]
@@ -77,14 +98,20 @@ impl ServiceOutput {
     pub fn chain_message(msg: ChainMessage) -> Self {
         let mut messages = SmallVec::new();
         messages.push(Message::Chain(msg));
-        Self { messages, effects: SmallVec::new() }
+        Self {
+            messages,
+            effects: SmallVec::new(),
+        }
     }
 
     #[inline]
     pub fn validator_message(msg: ValidatorMessage) -> Self {
         let mut messages = SmallVec::new();
         messages.push(Message::Validator(msg));
-        Self { messages, effects: SmallVec::new() }
+        Self {
+            messages,
+            effects: SmallVec::new(),
+        }
     }
 
     #[inline]
