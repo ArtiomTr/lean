@@ -1,12 +1,13 @@
 pub mod peerdb;
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use libp2p_identity::PeerId;
 
 use crate::types::ConnectionState;
+use peerdb::peer_info::ConnectionDirection;
 use peerdb::PeerDB;
 
 /// Events emitted by the peer manager.
@@ -37,12 +38,20 @@ impl PeerManager {
     }
 
     pub fn on_connect_incoming(&mut self, peer_id: PeerId) {
-        self.db.update_state(peer_id, ConnectionState::Connected);
+        self.db.update_connection(
+            peer_id,
+            ConnectionState::Connected,
+            ConnectionDirection::Incoming,
+        );
         self.update_count();
     }
 
     pub fn on_connect_outgoing(&mut self, peer_id: PeerId) {
-        self.db.update_state(peer_id, ConnectionState::Connected);
+        self.db.update_connection(
+            peer_id,
+            ConnectionState::Connected,
+            ConnectionDirection::Outgoing,
+        );
         self.update_count();
     }
 

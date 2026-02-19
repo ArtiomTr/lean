@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use libp2p_identity::PeerId;
 
 use crate::types::ConnectionState;
-use peer_info::PeerInfo;
+use peer_info::{ConnectionDirection, PeerInfo};
 
 /// In-memory database of known peers and their connection state.
 ///
@@ -23,6 +23,18 @@ impl PeerDB {
 
     pub fn update_state(&mut self, peer_id: PeerId, state: ConnectionState) {
         self.peers.entry(peer_id).or_default().state = state;
+    }
+
+    /// Update both connection state and direction.
+    pub fn update_connection(
+        &mut self,
+        peer_id: PeerId,
+        state: ConnectionState,
+        direction: ConnectionDirection,
+    ) {
+        let info = self.peers.entry(peer_id).or_default();
+        info.state = state;
+        info.direction = direction;
     }
 
     pub fn peer_state(&self, peer_id: &PeerId) -> Option<ConnectionState> {

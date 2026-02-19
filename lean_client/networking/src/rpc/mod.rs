@@ -2,7 +2,7 @@ pub mod codec;
 pub mod methods;
 pub mod protocol;
 
-pub use codec::LeanCodec;
+pub use codec::{LeanCodec, RESP_TIMEOUT, TTFB_TIMEOUT};
 pub use methods::{LeanRequest, LeanResponse};
 pub use protocol::{BLOCKS_BY_ROOT_PROTOCOL_V1, LeanProtocol, STATUS_PROTOCOL_V1};
 
@@ -26,5 +26,9 @@ pub fn build_rpc() -> Rpc {
             ProtocolSupport::Full,
         ),
     ];
-    RequestResponse::with_codec(LeanCodec::default(), protocols, Config::default())
+
+    // Configure request timeout per leanSpec
+    let config = Config::default().with_request_timeout(RESP_TIMEOUT);
+
+    RequestResponse::with_codec(LeanCodec::default(), protocols, config)
 }

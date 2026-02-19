@@ -1,5 +1,5 @@
 use std::io;
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
 
 use async_trait::async_trait;
 use containers::{SignedBlockWithAttestation, Status};
@@ -12,9 +12,21 @@ use ssz::{H256, SszReadDefault as _, SszWrite as _};
 use super::methods::{LeanRequest, LeanResponse, MAX_REQUEST_BLOCKS};
 use super::protocol::LeanProtocol;
 
+use std::time::Duration;
+
 /// Maximum uncompressed payload size (10 MiB per leanSpec).
-const MAX_PAYLOAD_SIZE: usize = 10 * 1024 * 1024;
+pub const MAX_PAYLOAD_SIZE: usize = 10 * 1024 * 1024;
 const RESPONSE_CODE_SUCCESS: u8 = 0;
+
+/// Time-to-first-byte timeout per leanSpec.
+///
+/// Maximum time to wait for the first byte of a response after sending a request.
+pub const TTFB_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Response timeout per leanSpec.
+///
+/// Maximum total time to receive a complete response.
+pub const RESP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Codec implementing the lean ethereum req/resp wire format.
 ///
@@ -125,40 +137,85 @@ impl LeanCodec {
         Ok(decompressed)
     }
 
-    fn encode_blocks(blocks: &[SignedBlockWithAttestation]) -> io::Result<Vec<u8>> {
-        let mut payload = Vec::new();
+    /// Encode blocks as chunked response per Ethereum P2P spec.
+    ///
+    /// Each block is encoded as a separate response chunk:
+    /// `[response_code: 1 byte][varint: len][snappy_framed_ssz]`
+    fn encode_blocks_chunked(blocks: &[SignedBlockWithAttestation]) -> io::Result<Vec<u8>> {
+        let mut wire = Vec::new();
         for block in blocks {
             let block_ssz = block.to_ssz().map_err(|e| {
                 io::Error::new(io::ErrorKind::Other, format!("SSZ encode block: {e}"))
             })?;
-            payload.extend_from_slice(&encode_varint(block_ssz.len()));
-            payload.extend_from_slice(&block_ssz);
+            let chunk = Self::encode_response_chunk(&block_ssz)?;
+            wire.extend_from_slice(&chunk);
         }
-        Ok(payload)
+        Ok(wire)
     }
 
-    fn decode_blocks(data: &[u8]) -> io::Result<Vec<SignedBlockWithAttestation>> {
+    /// Decode chunked block response per Ethereum P2P spec.
+    ///
+    /// Each block arrives as a separate response chunk.
+    fn decode_blocks_chunked(data: &[u8]) -> io::Result<Vec<SignedBlockWithAttestation>> {
         let mut blocks = Vec::new();
         let mut pos = 0;
+
         while pos < data.len() {
-            let (block_len, varint_size) = decode_varint(&data[pos..])?;
-            pos += varint_size;
-            if pos + block_len > data.len() {
+            // Each chunk: [response_code: 1][varint: len][snappy_payload]
+            if data.len() - pos < 2 {
+                break; // Not enough data for another chunk
+            }
+
+            let response_code = data[pos];
+            if response_code != RESPONSE_CODE_SUCCESS {
                 return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "truncated block payload",
+                    io::ErrorKind::Other,
+                    format!("non-success response code in block chunk: {response_code}"),
                 ));
             }
-            let block = SignedBlockWithAttestation::from_ssz_default(&data[pos..pos + block_len])
-                .map_err(|e| {
+            pos += 1;
+
+            // Decode varint length
+            let (declared_len, varint_size) = decode_varint(&data[pos..])?;
+            pos += varint_size;
+
+            if declared_len > MAX_PAYLOAD_SIZE {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("block chunk too large: {declared_len} > {MAX_PAYLOAD_SIZE}"),
+                ));
+            }
+
+            // Decompress using a cursor to track consumed bytes
+            let remaining = &data[pos..];
+            let mut cursor = Cursor::new(remaining);
+            let mut decoder = FrameDecoder::new(&mut cursor);
+            let mut decompressed = Vec::new();
+            decoder.read_to_end(&mut decompressed)?;
+
+            // Get how many compressed bytes were consumed
+            let consumed = cursor.position() as usize;
+            pos += consumed;
+
+            if decompressed.len() != declared_len {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "block length mismatch: declared {declared_len}, got {}",
+                        decompressed.len()
+                    ),
+                ));
+            }
+
+            let block = SignedBlockWithAttestation::from_ssz_default(&decompressed).map_err(|e| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("SSZ decode block: {e:?}"),
                 )
             })?;
             blocks.push(block);
-            pos += block_len;
         }
+
         Ok(blocks)
     }
 
@@ -220,10 +277,9 @@ impl LeanCodec {
                 })?;
                 Self::encode_response_chunk(&ssz)
             }
-            LeanResponse::BlocksByRoot(blocks) => {
-                let payload = Self::encode_blocks(blocks)?;
-                Self::encode_response_chunk(&payload)
-            }
+            // BlocksByRoot uses chunked response format per spec:
+            // Each block is a separate chunk with its own response code.
+            LeanResponse::BlocksByRoot(blocks) => Self::encode_blocks_chunked(blocks),
             LeanResponse::Empty => Ok(Vec::new()),
         }
     }
@@ -232,14 +288,17 @@ impl LeanCodec {
         if data.is_empty() {
             return Ok(LeanResponse::Empty);
         }
-        let payload = Self::decode_response_chunk(data)?;
+
         if protocol.contains("status") {
+            // Status is a single-chunk response
+            let payload = Self::decode_response_chunk(data)?;
             let status = Status::from_ssz_default(&payload).map_err(|e| {
                 io::Error::new(io::ErrorKind::Other, format!("SSZ decode Status: {e:?}"))
             })?;
             Ok(LeanResponse::Status(status))
         } else if protocol.contains("blocks_by_root") {
-            let blocks = Self::decode_blocks(&payload)?;
+            // BlocksByRoot uses chunked response format per spec
+            let blocks = Self::decode_blocks_chunked(data)?;
             Ok(LeanResponse::BlocksByRoot(blocks))
         } else {
             Err(io::Error::new(
@@ -416,10 +475,11 @@ mod tests {
     }
 
     #[test]
-    fn empty_blocks_roundtrip() {
+    fn empty_blocks_chunked_roundtrip() {
         let blocks: Vec<SignedBlockWithAttestation> = vec![];
-        let encoded = LeanCodec::encode_blocks(&blocks).unwrap();
-        let decoded = LeanCodec::decode_blocks(&encoded).unwrap();
+        let encoded = LeanCodec::encode_blocks_chunked(&blocks).unwrap();
+        assert!(encoded.is_empty()); // No blocks = no chunks
+        let decoded = LeanCodec::decode_blocks_chunked(&encoded).unwrap();
         assert_eq!(decoded.len(), 0);
     }
 

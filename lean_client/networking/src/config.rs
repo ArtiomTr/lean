@@ -16,6 +16,20 @@ pub const MESSAGE_DOMAIN_VALID_SNAPPY: &[u8; 1] = &[0x01];
 /// 1-byte domain for gossip message-id isolation of invalid snappy messages.
 pub const MESSAGE_DOMAIN_INVALID_SNAPPY: &[u8; 1] = &[0x00];
 
+// ── Chain timing constants ────────────────────────────────────────────────────
+// These come from the chain config per leanSpec and are used to calculate
+// gossipsub's duplicate cache TTL.
+
+/// Number of slots to look back for justification.
+///
+/// Per leanSpec: `JUSTIFICATION_LOOKBACK_SLOTS = 3`
+pub const JUSTIFICATION_LOOKBACK_SLOTS: u64 = 3;
+
+/// Duration of each slot in seconds.
+///
+/// Per leanSpec: `SECONDS_PER_SLOT = 4`
+pub const SECONDS_PER_SLOT: u64 = 4;
+
 /// Main network configuration.
 ///
 /// Includes both network transport settings and gossipsub configuration,
@@ -148,9 +162,9 @@ pub struct GossipsubConfig {
 
 impl GossipsubConfig {
     pub fn new() -> Result<Self> {
-        let justification_lookback_slots: u64 = 3;
-        let seconds_per_slot: u64 = 4;
-        let seen_ttl_secs = seconds_per_slot * justification_lookback_slots * 2;
+        // Calculate seen TTL from chain timing constants per leanSpec:
+        // seen_ttl = SECONDS_PER_SLOT * JUSTIFICATION_LOOKBACK_SLOTS * 2
+        let seen_ttl_secs = SECONDS_PER_SLOT * JUSTIFICATION_LOOKBACK_SLOTS * 2;
 
         let config = ConfigBuilder::default()
             .heartbeat_interval(Duration::from_millis(700))

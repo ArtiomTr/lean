@@ -431,11 +431,9 @@ impl<P: Preset> Discovery<P> {
         Ok(true)
     }
 
-    // TODO: Group these functions here once the ENR is shared across discv5 and lighthouse and
-    // Lighthouse can modify the ENR directly.
-    // This currently doesn't support ipv6. All of these functions should be removed and
-    // addressed properly in the following issue.
-    // https://github.com/sigp/lighthouse/issues/4706
+    /// Updates the local ENR QUIC port.
+    ///
+    /// This returns Ok(true) if the ENR was updated, otherwise Ok(false) if nothing was done.
     pub fn update_enr_quic_port(&mut self, port: u16, v6: bool) -> Result<bool, String> {
         let enr_field = if v6 {
             if self.discv5.external_enr().read().quic6() == Some(port) {
@@ -450,11 +448,6 @@ impl<P: Preset> Discovery<P> {
             }
             "quic"
         };
-        let current_field = self.discv5.external_enr().read().quic4();
-        if current_field == Some(port) {
-            // The current field is already set, no need to update.
-            return Ok(false);
-        }
 
         self.discv5
             .enr_insert(enr_field, &port)
