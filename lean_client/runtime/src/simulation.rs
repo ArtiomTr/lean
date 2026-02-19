@@ -12,19 +12,9 @@ use ssz::H256;
 use tokio::sync::mpsc;
 use tracing::Span;
 
-use crate::{chain::ChainMessage, clock::Tick, validator::ValidatorMessage};
+pub use crate::network::NetworkEvent;
 
-/// A block or attestation received from the P2P network.
-///
-/// Emitted by `NetworkEventSource` when a peer gossips a block or attestation,
-/// or when a block-by-root response is received.
-#[derive(Debug, Clone)]
-pub enum NetworkEvent {
-    /// A signed block with proposer attestation received from a peer.
-    BlockReceived(SignedBlockWithAttestation),
-    /// A signed attestation received from a peer.
-    AttestationReceived(SignedAttestation),
-}
+use crate::{chain::ChainMessage, clock::Tick, validator::ValidatorMessage};
 
 /// Events from non-deterministic sources (EventSources).
 ///
