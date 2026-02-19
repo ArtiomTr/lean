@@ -3,6 +3,7 @@ use bls as _;
 
 mod chain;
 mod clock;
+pub mod dsim;
 mod event;
 mod service;
 mod sim;

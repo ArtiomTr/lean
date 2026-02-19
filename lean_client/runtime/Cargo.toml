@@ -7,6 +7,8 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+rand = { workspace = true }
+rand_chacha = { workspace = true }
 smallvec = { workspace = true }
 bls = { workspace = true }
 containers = { workspace = true }

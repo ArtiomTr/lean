@@ -46,6 +46,7 @@ pub enum ChainMessage {
 ///
 /// All store mutations happen here. Other services request state changes
 /// through Messages.
+#[derive(Clone)]
 pub struct ChainService {
     store: Store,
 }

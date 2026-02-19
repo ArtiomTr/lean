@@ -61,6 +61,7 @@ pub enum ValidatorMessage {
 ///
 /// Loads and caches secret keys from disk, providing signing operations
 /// for block proposals and attestations.
+#[derive(Clone)]
 pub struct KeyManager {
     keys: HashMap<u64, SecretKey>,
 }
@@ -110,6 +111,7 @@ pub struct ValidatorConfig {
 /// the Store directly — all store data arrives via `ValidatorMessage::SlotData`
 /// and `ValidatorMessage::BlockProduced`, and all store mutations are requested
 /// via `ChainMessage::ProduceBlock` and `ChainMessage::ProcessAttestation`.
+#[derive(Clone)]
 pub struct ValidatorService {
     config: ValidatorConfig,
     key_manager: KeyManager,
