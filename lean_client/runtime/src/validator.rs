@@ -26,7 +26,11 @@ use ssz::{H256, PersistentList, SszHash as _};
 use tracing::{debug, info, warn};
 use xmss::{SecretKey, Signature};
 
-use crate::{chain::ChainMessage, clock::Interval};
+use crate::{
+    chain::ChainMessage,
+    clock::Interval,
+    simulation::{Service, ServiceInput, ServiceOutput},
+};
 
 /// Messages that ValidatorService receives (input to the state machine).
 #[derive(Debug, Clone)]
@@ -124,17 +128,16 @@ pub struct ValidatorConfig {
 /// via `Message::ProduceBlock` and `Message::ProcessAttestation`.
 pub struct ValidatorService {
     config: ValidatorConfig,
-    key_manager: Option<KeyManager>,
+    key_manager: KeyManager,
     blocks_produced: u64,
     attestations_produced: u64,
 }
 
 impl ValidatorService {
     #[must_use]
-    pub fn new(config: ValidatorConfig, key_manager: Option<KeyManager>) -> Self {
+    pub fn new(config: ValidatorConfig, key_manager: KeyManager) -> Self {
         info!(
             indices = ?config.validator_indices,
-            has_keys = key_manager.is_some(),
             "ValidatorService initialized",
         );
 
@@ -358,5 +361,13 @@ impl ValidatorService {
         } else {
             Signature::default()
         }
+    }
+}
+
+impl Service for ValidatorService {
+    type Message = ValidatorMessage;
+
+    fn handle_input(&mut self, input: ServiceInput<Self::Message>) -> ServiceOutput {
+        todo!()
     }
 }

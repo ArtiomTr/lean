@@ -59,8 +59,8 @@ pub enum ServiceInput<T> {
 
 #[derive(Debug, Clone)]
 pub struct ServiceOutput {
-    messages: Vec<Message>,
-    effects: Vec<Effect>,
+    pub messages: Vec<Message>,
+    pub effects: Vec<Effect>,
 }
 
 pub trait Service {
