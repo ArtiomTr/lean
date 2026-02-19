@@ -1,16 +1,10 @@
-// This file is copied from https://github.com/grandinetech/eth2_libp2p, which itself was ported from lighthouse.
-// Licensed under Apache License 2.0. Full license text is here https://github.com/grandinetech/eth2_libp2p/blob/main/LICENSE
-
 //! ENR extension trait to support libp2p integration.
 
+use crate::{Enr, Multiaddr, PeerId};
 use anyhow::{Result, bail};
-use discv5::{
-    Enr,
-    enr::{CombinedKey, CombinedPublicKey},
-};
+use discv5::enr::{CombinedKey, CombinedPublicKey};
 use libp2p::core::multiaddr::Protocol;
 use libp2p::identity::{KeyType, Keypair, PublicKey, ed25519, secp256k1};
-use libp2p::{Multiaddr, PeerId};
 use tiny_keccak::{Hasher, Keccak};
 
 pub const QUIC_ENR_KEY: &str = "quic";
@@ -217,16 +211,13 @@ impl EnrExt for Enr {
     }
 
     /// Returns a list of multiaddrs if the ENR has an `ip` and a `quic` key **or** an `ip6` and a `quic6`.
-    /// This also appends the `PeerId` into each multiaddr with the `P2p` protocol.
     fn multiaddr_quic(&self) -> Vec<Multiaddr> {
-        let peer_id = self.peer_id();
         let mut multiaddrs: Vec<Multiaddr> = Vec::new();
         if let Some(quic_port) = self.quic4() {
             if let Some(ip) = self.ip4() {
                 let mut multiaddr: Multiaddr = ip.into();
                 multiaddr.push(Protocol::Udp(quic_port));
                 multiaddr.push(Protocol::QuicV1);
-                multiaddr.push(Protocol::P2p(peer_id));
                 multiaddrs.push(multiaddr);
             }
         }
@@ -236,7 +227,6 @@ impl EnrExt for Enr {
                 let mut multiaddr: Multiaddr = ip6.into();
                 multiaddr.push(Protocol::Udp(quic6_port));
                 multiaddr.push(Protocol::QuicV1);
-                multiaddr.push(Protocol::P2p(peer_id));
                 multiaddrs.push(multiaddr);
             }
         }

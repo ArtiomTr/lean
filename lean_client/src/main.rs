@@ -15,7 +15,7 @@ use networking::{
     config::{Config as NetworkServiceConfig, GossipsubConfig},
     gossipsub::topic::get_topics,
 };
-use runtime::{KeyManager, NetworkConfig, RealSimulator, ValidatorConfig};
+use runtime::{KeyManager, NetworkConfig, Node, ValidatorConfig};
 use ssz::{PersistentList, SszHash};
 use std::net::IpAddr;
 use tracing::level_filters::LevelFilter;
@@ -273,30 +273,30 @@ async fn main() -> Result<()> {
         }
     });
 
-    // ── Simulator ─────────────────────────────────────────────────────────────
+    // ── Node ──────────────────────────────────────────────────────────────────
 
-    let simulator = RealSimulator::new(
+    let node = Node::new(
         genesis_time,
         store,
         validator_config,
         key_manager,
-        Some(network_config),
+        network_config,
     )
-    .context("Failed to create simulator")?;
+    .context("Failed to create node")?;
 
-    // The simulator builds its own tokio runtime internally; run it in a
+    // The node builds its own tokio runtime internally; run it in a
     // blocking thread so it doesn't fight with the outer async runtime.
-    let sim_handle = tokio::task::spawn_blocking(move || simulator.run());
+    let node_handle = tokio::task::spawn_blocking(move || node.run());
 
     tokio::select! {
         _ = http_handle => {
             info!("HTTP service finished");
         }
-        result = sim_handle => {
+        result = node_handle => {
             match result {
-                Ok(Ok(())) => info!("Simulator finished"),
-                Ok(Err(e)) => tracing::error!("Simulator error: {e:?}"),
-                Err(e) => tracing::error!("Simulator panicked: {e:?}"),
+                Ok(Ok(())) => info!("Node finished"),
+                Ok(Err(e)) => tracing::error!("Node error: {e:?}"),
+                Err(e) => tracing::error!("Node panicked: {e:?}"),
             }
         }
     }

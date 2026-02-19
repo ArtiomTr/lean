@@ -17,7 +17,7 @@
 //!
 //! When blocks or attestations arrive from the P2P network (`Event::Network`),
 //! `ChainService` inserts them into the fork choice store. If a block's parent
-//! is not yet in the store, it emits `Effect::RequestBlocksByRoot` so the
+//! is not yet in the store, it emits `Effect::Network(NetworkEffect::RequestBlocksByRoot)` so the
 //! `NetworkEventSource` can fetch the missing ancestor from peers.
 
 use containers::{
@@ -34,7 +34,8 @@ use tracing::{debug, info, warn};
 
 use crate::{
     clock::{Interval, Tick},
-    simulation::{Effect, Event, NetworkEvent, Service, ServiceInput, ServiceOutput},
+    environment::{Effect, Event, NetworkEvent, Service, ServiceInput, ServiceOutput},
+    network::NetworkEffect,
     validator::ValidatorMessage,
 };
 
@@ -93,7 +94,7 @@ impl ChainService {
     /// Process a block from the network and return any required effects.
     ///
     /// On success, the block is inserted into the fork choice store.
-    /// When the parent block is unknown, emits `Effect::RequestBlocksByRoot`
+    /// When the parent block is unknown, emits `Effect::Network(NetworkEffect::RequestBlocksByRoot)`
     /// so the missing ancestor can be fetched from peers.
     fn process_network_block(&mut self, signed_block: SignedBlockWithAttestation) -> ServiceOutput {
         let slot = signed_block.message.block.slot.0;
@@ -120,7 +121,7 @@ impl ChainService {
                     }
 
                     ServiceOutput::none()
-                        .with_effect(Effect::RequestBlocksByRoot(vec![parent_root]))
+                        .with_effect(Effect::Network(NetworkEffect::RequestBlocksByRoot(vec![parent_root])))
                 } else {
                     warn!(%err, slot, "Failed to process network block");
                     ServiceOutput::none()

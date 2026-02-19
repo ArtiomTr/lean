@@ -7,8 +7,8 @@
 //! - **Events** it emits: blocks and attestations received from peers
 //!   (`NetworkEvent::BlockReceived`, `NetworkEvent::AttestationReceived`).
 //! - **Effects** it consumes: gossip requests and block-by-root requests from
-//!   the service layer (`Effect::GossipBlock`, `Effect::GossipAttestation`,
-//!   `Effect::RequestBlocksByRoot`).
+//!   the service layer (`NetworkEffect::GossipBlock`, `NetworkEffect::GossipAttestation`,
+//!   `NetworkEffect::RequestBlocksByRoot`).
 //!
 //! Internally, `NetworkEventSource` owns the `NetworkService` configuration
 //! and spawns three tasks when [`EventSource::run`] is called:
@@ -32,6 +32,7 @@ use std::sync::{Arc, atomic::AtomicU64};
 use anyhow::Result;
 use containers::{SignedAttestation, SignedBlockWithAttestation};
 use libp2p_identity::Keypair;
+use ssz::H256;
 use networking::{
     service::{NetworkService, NetworkServiceConfig},
     types::{ChainMessage, OutboundP2pRequest},
@@ -39,7 +40,7 @@ use networking::{
 use tokio::sync::mpsc;
 use tracing::error;
 
-use crate::simulation::{Effect, EventSource};
+use crate::environment::{Effect, EventSource};
 
 /// A block or attestation received from the P2P network.
 ///
@@ -51,6 +52,22 @@ pub enum NetworkEvent {
     BlockReceived(SignedBlockWithAttestation),
     /// A signed attestation received from a peer.
     AttestationReceived(SignedAttestation),
+}
+
+/// Network effects consumed by `NetworkEventSource`.
+#[derive(Debug, Clone)]
+pub enum NetworkEffect {
+    /// Gossip a signed block with proposer attestation to the network.
+    GossipBlock(SignedBlockWithAttestation),
+
+    /// Gossip a signed attestation to the network.
+    GossipAttestation(SignedAttestation),
+
+    /// Request blocks by root hash from connected peers.
+    ///
+    /// Emitted by `ChainService` when a received block references an unknown parent.
+    /// The `NetworkEventSource` handles this by sending a `BlocksByRoot` request to a peer.
+    RequestBlocksByRoot(Vec<H256>),
 }
 
 /// Configuration used to construct the underlying `NetworkService`.
@@ -128,10 +145,11 @@ impl EventSource for NetworkEventSource {
         // Outbound bridge: convert Effects → OutboundP2pRequests.
         tokio::spawn(async move {
             while let Some(effect) = effect_rx.recv().await {
-                let request = match effect {
-                    Effect::GossipBlock(block) => OutboundP2pRequest::GossipBlockWithAttestation(block),
-                    Effect::GossipAttestation(att) => OutboundP2pRequest::GossipAttestation(att),
-                    Effect::RequestBlocksByRoot(roots) => OutboundP2pRequest::RequestBlocksByRoot(roots),
+                let Effect::Network(network_effect) = effect;
+                let request = match network_effect {
+                    NetworkEffect::GossipBlock(block) => OutboundP2pRequest::GossipBlockWithAttestation(block),
+                    NetworkEffect::GossipAttestation(att) => OutboundP2pRequest::GossipAttestation(att),
+                    NetworkEffect::RequestBlocksByRoot(roots) => OutboundP2pRequest::RequestBlocksByRoot(roots),
                 };
                 if outbound_tx.send(request).is_err() {
                     // NetworkService has stopped; shut down gracefully.

@@ -24,7 +24,7 @@
 //! # Example
 //!
 //! ```ignore
-//! let mut sim = DeterministicSimulator::new(store, None, None);
+//! let mut sim = Simulator::new(store, None, None);
 //!
 //! sim.push_event(Event::Tick(Tick::new(0, Interval::BlockProposal)));
 //!
@@ -45,7 +45,7 @@ use tracing::warn;
 
 use crate::{
     chain::{ChainMessage, ChainService},
-    simulation::{Effect, Event, Message, Service, ServiceInput, ServiceOutput},
+    environment::{Effect, Event, Message, Service, ServiceInput, ServiceOutput},
     validator::{KeyManager, ValidatorConfig, ValidatorMessage, ValidatorService},
 };
 
@@ -57,7 +57,7 @@ pub enum ServiceId {
 }
 
 #[derive(Clone)]
-pub struct DeterministicSimulator {
+pub struct Simulator {
     chain: ChainService,
     chain_queue: VecDeque<ServiceInput<ChainMessage>>,
     validator: Option<ValidatorService>,
@@ -67,7 +67,7 @@ pub struct DeterministicSimulator {
     rng: ChaCha8Rng,
 }
 
-impl DeterministicSimulator {
+impl Simulator {
     /// Create a simulator with the built-in default seed.
     pub fn new(
         store: Store,

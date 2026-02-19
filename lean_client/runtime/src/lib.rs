@@ -3,15 +3,16 @@ use bls as _;
 
 mod chain;
 mod clock;
-pub mod dsim;
+mod environment;
 mod event;
 pub mod network;
+pub mod node;
 mod service;
-pub mod sim;
-mod simulation;
+pub mod simulator;
 mod validator;
 
-pub use network::{NetworkConfig, NetworkEventSource};
-pub use sim::RealSimulator;
-pub use simulation::{Effect, Event, NetworkEvent};
+pub use environment::{Effect, Event, NetworkEvent};
+pub use network::{NetworkConfig, NetworkEffect, NetworkEventSource};
+pub use node::Node;
+pub use simulator::Simulator;
 pub use validator::{KeyManager, ValidatorConfig};

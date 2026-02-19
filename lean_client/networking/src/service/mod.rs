@@ -48,12 +48,6 @@ use crate::{
 use crate::discovery::enr_ext::EnrExt as _;
 use crate::service::behaviour::{Behaviour, BehaviourEvent, LeanGossipsub};
 
-pub mod config {
-    pub use crate::config::{Config, GossipsubConfig};
-}
-
-// ── Bootnode parsing ─────────────────────────────────────────────────────────
-
 #[derive(Debug, Clone, Serialize, Deserialize, Display)]
 #[serde(untagged)]
 enum BootnodeArg {

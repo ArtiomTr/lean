@@ -6,13 +6,11 @@
 //! - **Effect**: From Services to EventSources (requests to the external world).
 
 use anyhow::Result;
-use containers::{SignedAttestation, SignedBlockWithAttestation};
 use smallvec::SmallVec;
-use ssz::H256;
 use tokio::sync::mpsc;
 use tracing::Span;
 
-pub use crate::network::NetworkEvent;
+pub use crate::network::{NetworkEffect, NetworkEvent};
 
 use crate::{chain::ChainMessage, clock::Tick, validator::ValidatorMessage};
 
@@ -50,17 +48,8 @@ impl SpannedEvent {
 /// Represent side-effects the deterministic core cannot perform itself.
 #[derive(Debug, Clone)]
 pub enum Effect {
-    /// Gossip a signed block with proposer attestation to the network.
-    GossipBlock(SignedBlockWithAttestation),
-
-    /// Gossip a signed attestation to the network.
-    GossipAttestation(SignedAttestation),
-
-    /// Request blocks by root hash from connected peers.
-    ///
-    /// Emitted by `ChainService` when a received block references an unknown parent.
-    /// The `NetworkEventSource` handles this by sending a `BlocksByRoot` request to a peer.
-    RequestBlocksByRoot(Vec<H256>),
+    /// Network-related effects (gossip, block requests).
+    Network(NetworkEffect),
 }
 
 #[derive(Debug, Clone)]

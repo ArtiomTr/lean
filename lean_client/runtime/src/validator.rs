@@ -29,7 +29,8 @@ use xmss::{SecretKey, Signature};
 use crate::{
     chain::ChainMessage,
     clock::{Interval, Tick},
-    simulation::{Effect, Event, Service, ServiceInput, ServiceOutput},
+    environment::{Effect, Event, Service, ServiceInput, ServiceOutput},
+    network::NetworkEffect,
 };
 
 /// Messages that ValidatorService receives (input to the state machine).
@@ -247,7 +248,7 @@ impl Service for ValidatorService {
                 };
 
                 ServiceOutput::chain_message(ChainMessage::ProcessAttestation(proposer_signed_att))
-                    .with_effect(Effect::GossipBlock(signed_block))
+                    .with_effect(Effect::Network(NetworkEffect::GossipBlock(signed_block)))
             }
 
             // ── Attestation flow ─────────────────────────────────────────────
@@ -300,7 +301,7 @@ impl Service for ValidatorService {
                     // Feed into local fork choice and broadcast to the network.
                     output = output
                         .with_chain_message(ChainMessage::ProcessAttestation(signed_att.clone()))
-                        .with_effect(Effect::GossipAttestation(signed_att));
+                        .with_effect(Effect::Network(NetworkEffect::GossipAttestation(signed_att)));
                 }
 
                 output
