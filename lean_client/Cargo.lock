@@ -5180,6 +5180,7 @@ dependencies = [
  "containers",
  "enum-iterator",
  "fork_choice",
+ "smallvec",
  "ssz",
  "strum",
  "tokio",

@@ -24,14 +24,17 @@ use fork_choice::{
 use tracing::{debug, info, warn};
 
 use crate::{
-    clock::Tick,
-    simulation::{Event, Message, Service, ServiceInput, ServiceOutput},
+    clock::{Interval, Tick},
+    simulation::{Event, Service, ServiceInput, ServiceOutput},
     validator::ValidatorMessage,
 };
 
 /// Messages that ChainService receives (input to the state machine).
 #[derive(Debug, Clone)]
 pub enum ChainMessage {
+    /// ValidatorService → ChainService: pull slot state to decide duties.
+    GetSlotData { slot: Slot, interval: Interval },
+
     /// ValidatorService → ChainService: request block production.
     ProduceBlock { slot: Slot, proposer_idx: u64 },
 
@@ -85,8 +88,8 @@ impl Service for ChainService {
         match input {
             // ── Tick flow ────────────────────────────────────────────────────
             //
-            // Every interval: advance the store clock, then broadcast current
-            // slot state to ValidatorService so it can decide its duties.
+            // Every interval: advance the store clock only.
+            // ValidatorService drives its own duties by sending GetSlotData.
             ServiceInput::Event(Event::Tick(Tick { slot, interval })) => {
                 let genesis_time = self.store.config.genesis_time;
                 let interval_index = u64::from(interval as u8);
@@ -97,6 +100,15 @@ impl Service for ChainService {
 
                 debug!(slot, interval = ?interval, store_time = self.store.time, "Chain tick processed");
 
+                ServiceOutput::none()
+            }
+
+            // ── GetSlotData flow ─────────────────────────────────────────────
+            //
+            // ValidatorService pulls slot state to decide its duties.
+            // Called after the tick for the same slot/interval has been processed,
+            // so on_tick has already run and the store is up to date.
+            ServiceInput::Message(ChainMessage::GetSlotData { slot, interval }) => {
                 let num_validators = self
                     .store
                     .states
@@ -104,15 +116,12 @@ impl Service for ChainService {
                     .map(|s| s.validators.len_u64())
                     .unwrap_or(0);
 
-                ServiceOutput {
-                    messages: vec![Message::Validator(ValidatorMessage::SlotData {
-                        slot: Slot(slot),
-                        interval,
-                        num_validators,
-                        attestation_data: self.attestation_data(Slot(slot)),
-                    })],
-                    effects: vec![],
-                }
+                ServiceOutput::validator_message(ValidatorMessage::SlotData {
+                    slot,
+                    interval,
+                    num_validators,
+                    attestation_data: self.attestation_data(slot),
+                })
             }
 
             // ── Block production flow ────────────────────────────────────────
@@ -132,19 +141,16 @@ impl Service for ChainService {
 
                         // Recompute attestation data after block insertion so the
                         // proposer's attestation reflects the updated chain head.
-                        ServiceOutput {
-                            messages: vec![Message::Validator(ValidatorMessage::BlockProduced {
-                                block,
-                                block_root,
-                                signatures,
-                                attestation_data: self.attestation_data(slot),
-                            })],
-                            effects: vec![],
-                        }
+                        ServiceOutput::validator_message(ValidatorMessage::BlockProduced {
+                            block,
+                            block_root,
+                            signatures,
+                            attestation_data: self.attestation_data(slot),
+                        })
                     }
                     Err(err) => {
                         warn!(%err, slot = slot.0, proposer = proposer_idx, "Failed to produce block");
-                        ServiceOutput { messages: vec![], effects: vec![] }
+                        ServiceOutput::none()
                     }
                 }
             }
@@ -158,7 +164,7 @@ impl Service for ChainService {
                 if let Err(err) = on_attestation(&mut self.store, att, false) {
                     warn!(%err, validator = validator_id, "Failed to process attestation in store");
                 }
-                ServiceOutput { messages: vec![], effects: vec![] }
+                ServiceOutput::none()
             }
         }
     }

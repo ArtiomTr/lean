@@ -232,6 +232,7 @@ validator = { path = "./validator" }
 xmss = { path = "./xmss" }
 
 anyhow = "1.0.100"
+smallvec = "1"
 async-trait = "0.1"
 axum = "0.8.8"
 bls = { git = "https://github.com/grandinetech/grandine", package = "bls", features = ["blst"], rev = "64afdee3c6be79fceffb66933dcb69a943f3f1ae" }

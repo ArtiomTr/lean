@@ -7,6 +7,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+smallvec = { workspace = true }
 bls = { workspace = true }
 containers = { workspace = true }
 enum-iterator = { workspace = true }

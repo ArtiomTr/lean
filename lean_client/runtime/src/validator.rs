@@ -28,8 +28,8 @@ use xmss::{SecretKey, Signature};
 
 use crate::{
     chain::ChainMessage,
-    clock::Interval,
-    simulation::{Effect, Message, Service, ServiceInput, ServiceOutput},
+    clock::{Interval, Tick},
+    simulation::{Effect, Event, Service, ServiceInput, ServiceOutput},
 };
 
 /// Messages that ValidatorService receives (input to the state machine).
@@ -123,7 +123,10 @@ impl ValidatorService {
             "ValidatorService initialized",
         );
 
-        Self { config, key_manager }
+        Self {
+            config,
+            key_manager,
+        }
     }
 
     /// Sign attestation data with the validator's XMSS key, falling back to a
@@ -153,30 +156,41 @@ impl Service for ValidatorService {
         match input {
             // ── Block proposal flow ──────────────────────────────────────────
             //
-            // Interval 0: chain tells us who should propose this slot.
+            // Tick fires at interval 0: ask chain for current slot state.
+            // The tick is sent to chain first (FIFO), so on_tick runs before
+            // our GetSlotData query is processed — no explicit synchronization needed.
+            ServiceInput::Event(Event::Tick(Tick {
+                slot,
+                interval: Interval::BlockProposal,
+            })) => ServiceOutput::chain_message(ChainMessage::GetSlotData {
+                slot: Slot(slot),
+                interval: Interval::BlockProposal,
+            }),
+
+            // Chain responds with slot state: decide if we're the proposer.
             // Proposer is selected round-robin: slot % num_validators.
-            // If we control that validator, ask ChainService to build the block.
             ServiceInput::Message(ValidatorMessage::SlotData {
                 slot,
                 interval: Interval::BlockProposal,
                 num_validators,
                 ..
-            }) if num_validators > 0 => {
+            }) => {
+                assert!(num_validators > 0, "Validators cannot be empty");
+
                 let proposer_idx = slot.0 % num_validators;
 
                 if !self.config.validator_indices.contains(&proposer_idx) {
-                    return ServiceOutput { messages: vec![], effects: vec![] };
+                    // we don't manage this proposal
+                    return ServiceOutput::none();
                 }
 
-                info!(slot = slot.0, proposer = proposer_idx, "Block proposal duty: requesting block production");
+                info!(
+                    slot = slot.0,
+                    proposer = proposer_idx,
+                    "Block proposal duty: requesting block production"
+                );
 
-                ServiceOutput {
-                    messages: vec![Message::Chain(ChainMessage::ProduceBlock {
-                        slot,
-                        proposer_idx,
-                    })],
-                    effects: vec![],
-                }
+                ServiceOutput::chain_message(ChainMessage::ProduceBlock { slot, proposer_idx })
             }
 
             // ChainService built the block; wrap it with proposer attestation
@@ -194,11 +208,14 @@ impl Service for ValidatorService {
                     validator_id: proposer_idx,
                     data: attestation_data,
                 };
-                let proposer_signature = self.sign_attestation(&proposer_attestation.data, proposer_idx);
+                let proposer_signature =
+                    self.sign_attestation(&proposer_attestation.data, proposer_idx);
 
                 let mut attestation_signatures = PersistentList::default();
                 for proof in signatures {
-                    attestation_signatures.push(proof).expect("Failed to add signature proof");
+                    attestation_signatures
+                        .push(proof)
+                        .expect("Failed to add signature proof");
                 }
 
                 let signed_block = SignedBlockWithAttestation {
@@ -227,15 +244,22 @@ impl Service for ValidatorService {
                     signature: proposer_signature,
                 };
 
-                ServiceOutput {
-                    messages: vec![Message::Chain(ChainMessage::ProcessAttestation(proposer_signed_att))],
-                    effects: vec![Effect::GossipBlock(signed_block)],
-                }
+                ServiceOutput::chain_message(ChainMessage::ProcessAttestation(proposer_signed_att))
+                    .with_effect(Effect::GossipBlock(signed_block))
             }
 
             // ── Attestation flow ─────────────────────────────────────────────
             //
-            // Interval 1: every validator attests exactly once per slot.
+            // Tick fires at interval 1: ask chain for current slot state.
+            ServiceInput::Event(Event::Tick(Tick {
+                slot,
+                interval: Interval::AttestationBroadcast,
+            })) => ServiceOutput::chain_message(ChainMessage::GetSlotData {
+                slot: Slot(slot),
+                interval: Interval::AttestationBroadcast,
+            }),
+
+            // Chain responds: every validator attests exactly once per slot.
             // Proposers already bundled their attestation inside the block at
             // interval 0, so they are skipped here to avoid double-attestation.
             ServiceInput::Message(ValidatorMessage::SlotData {
@@ -245,13 +269,16 @@ impl Service for ValidatorService {
                 attestation_data,
             }) if num_validators > 0 => {
                 let proposer_idx = slot.0 % num_validators;
-                let mut messages = vec![];
-                let mut effects = vec![];
+                let mut output = ServiceOutput::none();
 
                 for &validator_idx in &self.config.validator_indices {
                     if validator_idx == proposer_idx {
                         // Proposer already attested within their block.
-                        debug!(slot = slot.0, validator = validator_idx, "Skipping proposer attestation (bundled in block)");
+                        debug!(
+                            slot = slot.0,
+                            validator = validator_idx,
+                            "Skipping proposer attestation (bundled in block)"
+                        );
                         continue;
                     }
 
@@ -262,19 +289,24 @@ impl Service for ValidatorService {
                         signature,
                     };
 
-                    info!(slot = slot.0, validator = validator_idx, "Attestation produced");
+                    info!(
+                        slot = slot.0,
+                        validator = validator_idx,
+                        "Attestation produced"
+                    );
 
                     // Feed into local fork choice and broadcast to the network.
-                    messages.push(Message::Chain(ChainMessage::ProcessAttestation(signed_att.clone())));
-                    effects.push(Effect::GossipAttestation(signed_att));
+                    output = output
+                        .with_chain_message(ChainMessage::ProcessAttestation(signed_att.clone()))
+                        .with_effect(Effect::GossipAttestation(signed_att));
                 }
 
-                ServiceOutput { messages, effects }
+                output
             }
 
             // All other inputs: nothing to do.
             ServiceInput::Event(_) | ServiceInput::Message(ValidatorMessage::SlotData { .. }) => {
-                ServiceOutput { messages: vec![], effects: vec![] }
+                ServiceOutput::none()
             }
         }
     }

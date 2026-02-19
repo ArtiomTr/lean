@@ -7,6 +7,7 @@
 
 use anyhow::Result;
 use containers::{SignedAttestation, SignedBlockWithAttestation};
+use smallvec::SmallVec;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::Span;
 
@@ -59,8 +60,50 @@ pub enum ServiceInput<T> {
 
 #[derive(Debug, Clone)]
 pub struct ServiceOutput {
-    pub messages: Vec<Message>,
-    pub effects: Vec<Effect>,
+    pub messages: SmallVec<[Message; 1]>,
+    pub effects: SmallVec<[Effect; 1]>,
+}
+
+impl ServiceOutput {
+    #[inline]
+    pub fn none() -> Self {
+        Self {
+            messages: SmallVec::new(),
+            effects: SmallVec::new(),
+        }
+    }
+
+    #[inline]
+    pub fn chain_message(msg: ChainMessage) -> Self {
+        let mut messages = SmallVec::new();
+        messages.push(Message::Chain(msg));
+        Self { messages, effects: SmallVec::new() }
+    }
+
+    #[inline]
+    pub fn validator_message(msg: ValidatorMessage) -> Self {
+        let mut messages = SmallVec::new();
+        messages.push(Message::Validator(msg));
+        Self { messages, effects: SmallVec::new() }
+    }
+
+    #[inline]
+    pub fn with_chain_message(mut self, msg: ChainMessage) -> Self {
+        self.messages.push(Message::Chain(msg));
+        self
+    }
+
+    #[inline]
+    pub fn with_validator_message(mut self, msg: ValidatorMessage) -> Self {
+        self.messages.push(Message::Validator(msg));
+        self
+    }
+
+    #[inline]
+    pub fn with_effect(mut self, eff: Effect) -> Self {
+        self.effects.push(eff);
+        self
+    }
 }
 
 pub trait Service {
