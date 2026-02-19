@@ -29,7 +29,7 @@ use xmss::{SecretKey, Signature};
 use crate::{
     chain::ChainMessage,
     clock::Interval,
-    simulation::{Service, ServiceInput, ServiceOutput},
+    simulation::{Effect, Message, Service, ServiceInput, ServiceOutput},
 };
 
 /// Messages that ValidatorService receives (input to the state machine).
@@ -55,22 +55,6 @@ pub enum ValidatorMessage {
         signatures: Vec<AggregatedSignatureProof>,
         attestation_data: AttestationData,
     },
-}
-
-/// What ValidatorService receives as input.
-pub enum ValidatorInput {
-    Message(ValidatorMessage),
-}
-
-/// What ValidatorService emits.
-pub enum ValidatorOutput {
-    /// Effects to EventSources.
-    Effect(Effect),
-
-    /// Messages to other services.
-    ///
-    /// We reuse ChainMessage directly instead of duplicating.
-    Message(ChainMessage),
 }
 
 /// XMSS key manager for validator signing operations.
@@ -123,14 +107,12 @@ pub struct ValidatorConfig {
 /// Drives validator duties based on Messages from ChainService.
 ///
 /// This service is a pure deterministic state machine. It never accesses
-/// the Store directly — all store data arrives via `Message::SlotData`
-/// and `Message::BlockProduced`, and all store mutations are requested
-/// via `Message::ProduceBlock` and `Message::ProcessAttestation`.
+/// the Store directly — all store data arrives via `ValidatorMessage::SlotData`
+/// and `ValidatorMessage::BlockProduced`, and all store mutations are requested
+/// via `ChainMessage::ProduceBlock` and `ChainMessage::ProcessAttestation`.
 pub struct ValidatorService {
     config: ValidatorConfig,
     key_manager: KeyManager,
-    blocks_produced: u64,
-    attestations_produced: u64,
 }
 
 impl ValidatorService {
@@ -141,225 +123,25 @@ impl ValidatorService {
             "ValidatorService initialized",
         );
 
-        Self {
-            config,
-            key_manager,
-            blocks_produced: 0,
-            attestations_produced: 0,
-        }
+        Self { config, key_manager }
     }
 
-    #[must_use]
-    pub fn blocks_produced(&self) -> u64 {
-        self.blocks_produced
-    }
+    /// Sign attestation data with the validator's XMSS key, falling back to a
+    /// zero signature if signing fails.
+    fn sign_attestation(&self, data: &AttestationData, validator_index: u64) -> Signature {
+        let message = data.hash_tree_root();
+        let epoch = data.slot.0 as u32;
 
-    #[must_use]
-    pub fn attestations_produced(&self) -> u64 {
-        self.attestations_produced
-    }
-
-    /// Process an input and return outputs.
-    ///
-    /// ValidatorService only acts on Messages from ChainService, not raw
-    /// Events. The ChainService translates Events into Messages containing
-    /// the store state this service needs.
-    pub fn handle_input(&mut self, input: ValidatorInput) -> Vec<ValidatorOutput> {
-        match input {
-            ValidatorInput::Message(msg) => self.handle_message(msg),
-        }
-    }
-
-    fn handle_message(&mut self, msg: ValidatorMessage) -> Vec<ValidatorOutput> {
-        match msg {
-            ValidatorMessage::SlotData {
-                slot,
-                interval,
-                num_validators,
-                attestation_data,
-            } => match interval {
-                Interval::BlockProposal => self.maybe_request_block(slot, num_validators),
-                Interval::AttestationBroadcast => {
-                    self.produce_attestations(slot, num_validators, &attestation_data)
-                }
-                Interval::SafeTargetUpdate | Interval::AttestationAcceptance => vec![],
-            },
-            ValidatorMessage::BlockProduced {
-                block,
-                block_root,
-                signatures,
-                attestation_data,
-            } => self.assemble_block(block, block_root, signatures, attestation_data),
-        }
-    }
-
-    /// Check if one of our validators is the proposer and request block
-    /// production from ChainService.
-    fn maybe_request_block(&self, slot: Slot, num_validators: u64) -> Vec<ValidatorOutput> {
-        if num_validators == 0 {
-            return vec![];
-        }
-
-        // Round-robin proposer selection per spec.
-        let expected_proposer = slot.0 % num_validators;
-
-        if !self.config.validator_indices.contains(&expected_proposer) {
-            return vec![];
-        }
-
-        info!(
-            slot = slot.0,
-            proposer = expected_proposer,
-            "Block proposal duty: requesting block production",
-        );
-
-        vec![ValidatorOutput::Message(ChainMessage::ProduceBlock {
-            slot,
-            proposer_idx: expected_proposer,
-        })]
-    }
-
-    /// Assemble the block envelope with proposer attestation and signatures.
-    ///
-    /// Called when ChainService responds with `BlockProduced` containing the
-    /// raw block and aggregated signature proofs.
-    fn assemble_block(
-        &mut self,
-        block: Block,
-        block_root: H256,
-        signatures: Vec<AggregatedSignatureProof>,
-        attestation_data: AttestationData,
-    ) -> Vec<ValidatorOutput> {
-        let proposer_idx = block.proposer_index;
-        let slot = block.slot;
-
-        // Create proposer attestation.
-        let proposer_attestation = Attestation {
-            validator_id: proposer_idx,
-            data: attestation_data,
-        };
-
-        // Sign the proposer attestation.
-        let proposer_signature =
-            self.sign_attestation_data(&proposer_attestation.data, proposer_idx);
-
-        // Convert signature proofs to PersistentList.
-        let mut attestation_signatures = PersistentList::default();
-        for proof in signatures {
-            attestation_signatures
-                .push(proof)
-                .expect("Failed to add signature proof");
-        }
-
-        let signed_block = SignedBlockWithAttestation {
-            message: BlockWithAttestation {
-                block,
-                proposer_attestation: proposer_attestation.clone(),
-            },
-            signature: BlockSignatures {
-                attestation_signatures,
-                proposer_signature: proposer_signature.clone(),
-            },
-        };
-
-        info!(
-            slot = slot.0,
-            block_root = %format_args!("0x{block_root:x}"),
-            proposer = proposer_idx,
-            "Block assembled",
-        );
-
-        self.blocks_produced += 1;
-
-        // Request ChainService to process the proposer attestation, and
-        // gossip the signed block to the network.
-        let proposer_signed_att = SignedAttestation {
-            validator_id: proposer_idx,
-            message: proposer_attestation.data,
-            signature: proposer_signature,
-        };
-
-        vec![
-            ValidatorOutput::Message(ChainMessage::ProcessAttestation(proposer_signed_att)),
-            ValidatorOutput::Effect(Effect::GossipBlock(signed_block)),
-        ]
-    }
-
-    /// Create attestations for all non-proposer validators we control.
-    ///
-    /// Every validator attests exactly once per slot. Since proposers already
-    /// bundled their attestation inside the block at interval 0, they are
-    /// skipped here to prevent double-attestation.
-    fn produce_attestations(
-        &mut self,
-        slot: Slot,
-        num_validators: u64,
-        attestation_data: &AttestationData,
-    ) -> Vec<ValidatorOutput> {
-        if num_validators == 0 {
-            return vec![];
-        }
-
-        let proposer_idx = slot.0 % num_validators;
-        let mut outputs = Vec::with_capacity(self.config.validator_indices.len() * 2);
-
-        for &validator_idx in &self.config.validator_indices {
-            // Skip the proposer: they already attested within their block.
-            if validator_idx == proposer_idx {
-                debug!(
-                    slot = slot.0,
-                    validator = validator_idx,
-                    "Skipping proposer attestation (bundled in block)",
+        match self.key_manager.sign(validator_index, epoch, message) {
+            Ok(sig) => sig,
+            Err(err) => {
+                warn!(
+                    %err,
+                    validator = validator_index,
+                    "Failed to sign attestation, using zero signature",
                 );
-                continue;
+                Signature::default()
             }
-
-            let signature = self.sign_attestation_data(attestation_data, validator_idx);
-
-            let signed_att = SignedAttestation {
-                validator_id: validator_idx,
-                message: attestation_data.clone(),
-                signature,
-            };
-
-            self.attestations_produced += 1;
-            info!(
-                slot = slot.0,
-                validator = validator_idx,
-                "Attestation produced"
-            );
-
-            // Request ChainService to process locally + gossip to network.
-            outputs.push(ValidatorOutput::Message(ChainMessage::ProcessAttestation(
-                signed_att.clone(),
-            )));
-            outputs.push(ValidatorOutput::Effect(Effect::GossipAttestation(
-                signed_att,
-            )));
-        }
-
-        outputs
-    }
-
-    /// Sign attestation data using XMSS or a zero signature if no keys loaded.
-    fn sign_attestation_data(&self, data: &AttestationData, validator_index: u64) -> Signature {
-        if let Some(ref km) = self.key_manager {
-            let message = data.hash_tree_root();
-            let epoch = data.slot.0 as u32;
-
-            match km.sign(validator_index, epoch, message) {
-                Ok(sig) => sig,
-                Err(err) => {
-                    warn!(
-                        %err,
-                        validator = validator_index,
-                        "Failed to sign attestation, using zero signature",
-                    );
-                    Signature::default()
-                }
-            }
-        } else {
-            Signature::default()
         }
     }
 }
@@ -368,6 +150,132 @@ impl Service for ValidatorService {
     type Message = ValidatorMessage;
 
     fn handle_input(&mut self, input: ServiceInput<Self::Message>) -> ServiceOutput {
-        todo!()
+        match input {
+            // ── Block proposal flow ──────────────────────────────────────────
+            //
+            // Interval 0: chain tells us who should propose this slot.
+            // Proposer is selected round-robin: slot % num_validators.
+            // If we control that validator, ask ChainService to build the block.
+            ServiceInput::Message(ValidatorMessage::SlotData {
+                slot,
+                interval: Interval::BlockProposal,
+                num_validators,
+                ..
+            }) if num_validators > 0 => {
+                let proposer_idx = slot.0 % num_validators;
+
+                if !self.config.validator_indices.contains(&proposer_idx) {
+                    return ServiceOutput { messages: vec![], effects: vec![] };
+                }
+
+                info!(slot = slot.0, proposer = proposer_idx, "Block proposal duty: requesting block production");
+
+                ServiceOutput {
+                    messages: vec![Message::Chain(ChainMessage::ProduceBlock {
+                        slot,
+                        proposer_idx,
+                    })],
+                    effects: vec![],
+                }
+            }
+
+            // ChainService built the block; wrap it with proposer attestation
+            // and broadcast to the network.
+            ServiceInput::Message(ValidatorMessage::BlockProduced {
+                block,
+                block_root,
+                signatures,
+                attestation_data,
+            }) => {
+                let proposer_idx = block.proposer_index;
+                let slot = block.slot;
+
+                let proposer_attestation = Attestation {
+                    validator_id: proposer_idx,
+                    data: attestation_data,
+                };
+                let proposer_signature = self.sign_attestation(&proposer_attestation.data, proposer_idx);
+
+                let mut attestation_signatures = PersistentList::default();
+                for proof in signatures {
+                    attestation_signatures.push(proof).expect("Failed to add signature proof");
+                }
+
+                let signed_block = SignedBlockWithAttestation {
+                    message: BlockWithAttestation {
+                        block,
+                        proposer_attestation: proposer_attestation.clone(),
+                    },
+                    signature: BlockSignatures {
+                        attestation_signatures,
+                        proposer_signature: proposer_signature.clone(),
+                    },
+                };
+
+                info!(
+                    slot = slot.0,
+                    block_root = %format_args!("0x{block_root:x}"),
+                    proposer = proposer_idx,
+                    "Block assembled",
+                );
+
+                // Feed the proposer's own attestation into fork choice, then
+                // broadcast the signed block to the network.
+                let proposer_signed_att = SignedAttestation {
+                    validator_id: proposer_idx,
+                    message: proposer_attestation.data,
+                    signature: proposer_signature,
+                };
+
+                ServiceOutput {
+                    messages: vec![Message::Chain(ChainMessage::ProcessAttestation(proposer_signed_att))],
+                    effects: vec![Effect::GossipBlock(signed_block)],
+                }
+            }
+
+            // ── Attestation flow ─────────────────────────────────────────────
+            //
+            // Interval 1: every validator attests exactly once per slot.
+            // Proposers already bundled their attestation inside the block at
+            // interval 0, so they are skipped here to avoid double-attestation.
+            ServiceInput::Message(ValidatorMessage::SlotData {
+                slot,
+                interval: Interval::AttestationBroadcast,
+                num_validators,
+                attestation_data,
+            }) if num_validators > 0 => {
+                let proposer_idx = slot.0 % num_validators;
+                let mut messages = vec![];
+                let mut effects = vec![];
+
+                for &validator_idx in &self.config.validator_indices {
+                    if validator_idx == proposer_idx {
+                        // Proposer already attested within their block.
+                        debug!(slot = slot.0, validator = validator_idx, "Skipping proposer attestation (bundled in block)");
+                        continue;
+                    }
+
+                    let signature = self.sign_attestation(&attestation_data, validator_idx);
+                    let signed_att = SignedAttestation {
+                        validator_id: validator_idx,
+                        message: attestation_data.clone(),
+                        signature,
+                    };
+
+                    info!(slot = slot.0, validator = validator_idx, "Attestation produced");
+
+                    // Feed into local fork choice and broadcast to the network.
+                    messages.push(Message::Chain(ChainMessage::ProcessAttestation(signed_att.clone())));
+                    effects.push(Effect::GossipAttestation(signed_att));
+                }
+
+                ServiceOutput { messages, effects }
+            }
+
+            // All other inputs: nothing to do.
+            ServiceInput::Event(_) | ServiceInput::Message(ValidatorMessage::SlotData { .. }) => {
+                ServiceOutput { messages: vec![], effects: vec![] }
+            }
+        }
     }
 }

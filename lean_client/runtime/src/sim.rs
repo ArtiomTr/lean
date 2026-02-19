@@ -9,13 +9,10 @@ use tokio_stream::StreamExt as _;
 use tracing::{Span, warn};
 
 use crate::{
-    chain::{ChainInput, ChainMessage, ChainService},
+    chain::ChainService,
     clock::SystemClock,
     simulation::{Effect, Event, EventSource, Message, Service, ServiceInput, SpannedEvent},
-    validator::{
-        KeyManager, ValidatorConfig, ValidatorInput, ValidatorMessage, ValidatorOutput,
-        ValidatorService,
-    },
+    validator::{KeyManager, ValidatorConfig, ValidatorService},
 };
 
 pub struct RealSimulator {

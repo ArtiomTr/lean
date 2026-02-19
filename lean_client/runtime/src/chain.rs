@@ -23,7 +23,11 @@ use fork_choice::{
 };
 use tracing::{debug, info, warn};
 
-use crate::{clock::Tick, simulation::Service, validator::ValidatorMessage};
+use crate::{
+    clock::Tick,
+    simulation::{Event, Message, Service, ServiceInput, ServiceOutput},
+    validator::ValidatorMessage,
+};
 
 /// Messages that ChainService receives (input to the state machine).
 #[derive(Debug, Clone)]
@@ -34,15 +38,6 @@ pub enum ChainMessage {
     /// ValidatorService → ChainService: process attestation in the store.
     ProcessAttestation(SignedAttestation),
 }
-
-/// What ChainService receives: an Event or a Message from another Service.
-pub enum ChainInput {
-    Event(Event),
-    Message(ChainMessage),
-}
-
-/// What ChainService emits: messages to ValidatorService.
-pub type ChainOutput = ValidatorMessage;
 
 /// Drives the consensus clock and owns the forkchoice store.
 ///
@@ -63,113 +58,22 @@ impl ChainService {
         &self.store
     }
 
-    /// Process an input and return outputs.
-    pub fn handle_input(&mut self, input: ChainInput) -> Vec<ChainOutput> {
-        match input {
-            ChainInput::Event(Event::Tick(tick)) => self.handle_tick(tick),
-            ChainInput::Message(msg) => self.handle_message(msg),
-        }
-    }
-
-    /// Advance the store clock and notify ValidatorService of current state.
-    fn handle_tick(&mut self, tick: Tick) -> Vec<ChainOutput> {
-        // Compute Unix timestamp from tick's logical time.
-        let genesis_time = self.store.config.genesis_time;
-        let interval_index = u64::from(tick.interval as u8);
-        let current_time =
-            genesis_time + tick.slot * SECONDS_PER_SLOT + interval_index * SECONDS_PER_INTERVAL;
-
-        on_tick(&mut self.store, current_time, false);
-
-        debug!(
-            slot = tick.slot,
-            interval = ?tick.interval,
-            store_time = self.store.time,
-            "Chain tick processed",
-        );
-
-        // Compute validator-relevant state from head.
-        let num_validators = self
-            .store
-            .states
-            .get(&self.store.head)
-            .map(|s| s.validators.len_u64())
-            .unwrap_or(0);
-
-        let attestation_data = self.produce_attestation_data(Slot(tick.slot));
-
-        vec![ValidatorMessage::SlotData {
-            slot: Slot(tick.slot),
-            interval: tick.interval,
-            num_validators,
-            attestation_data,
-        }]
-    }
-
-    fn handle_message(&mut self, msg: ChainMessage) -> Vec<ChainOutput> {
-        match msg {
-            ChainMessage::ProduceBlock { slot, proposer_idx } => {
-                self.handle_produce_block(slot, proposer_idx)
-            }
-            ChainMessage::ProcessAttestation(att) => {
-                let validator_id = att.validator_id;
-                if let Err(err) = on_attestation(&mut self.store, att, false) {
-                    warn!(%err, validator = validator_id, "Failed to process attestation in store");
-                }
-                vec![]
-            }
-        }
-    }
-
-    /// Build a block via `produce_block_with_signatures` and return the result
-    /// as a `BlockProduced` message for ValidatorService to assemble.
-    fn handle_produce_block(&mut self, slot: Slot, proposer_idx: u64) -> Vec<ChainOutput> {
-        match produce_block_with_signatures(&mut self.store, slot, proposer_idx) {
-            Ok((block_root, block, signatures)) => {
-                info!(
-                    slot = slot.0,
-                    block_root = %format_args!("0x{block_root:x}"),
-                    proposer = proposer_idx,
-                    "Block produced and stored",
-                );
-
-                // Compute fresh attestation data after block insertion, so the
-                // proposer's attestation reflects the updated chain head.
-                let attestation_data = self.produce_attestation_data(slot);
-
-                vec![ValidatorMessage::BlockProduced {
-                    block,
-                    block_root,
-                    signatures,
-                    attestation_data,
-                }]
-            }
-            Err(err) => {
-                warn!(%err, slot = slot.0, proposer = proposer_idx, "Failed to produce block");
-                vec![]
-            }
-        }
-    }
-
     /// Construct `AttestationData` from the current store state.
     ///
     /// Per spec: head checkpoint from current head, target from
     /// `get_vote_target`, source from `latest_justified`.
-    fn produce_attestation_data(&self, slot: Slot) -> AttestationData {
+    fn attestation_data(&self, slot: Slot) -> AttestationData {
         let head_block = &self.store.blocks[&self.store.head];
         let head_checkpoint = Checkpoint {
             root: self.store.head,
             slot: head_block.slot,
         };
 
-        let target = get_vote_target(&self.store);
-        let source = self.store.latest_justified.clone();
-
         AttestationData {
             slot,
             head: head_checkpoint,
-            target,
-            source,
+            target: get_vote_target(&self.store),
+            source: self.store.latest_justified.clone(),
         }
     }
 }
@@ -177,10 +81,85 @@ impl ChainService {
 impl Service for ChainService {
     type Message = ChainMessage;
 
-    fn handle_input(
-        &mut self,
-        input: crate::simulation::ServiceInput<Self::Message>,
-    ) -> crate::simulation::ServiceOutput {
-        todo!()
+    fn handle_input(&mut self, input: ServiceInput<Self::Message>) -> ServiceOutput {
+        match input {
+            // ── Tick flow ────────────────────────────────────────────────────
+            //
+            // Every interval: advance the store clock, then broadcast current
+            // slot state to ValidatorService so it can decide its duties.
+            ServiceInput::Event(Event::Tick(Tick { slot, interval })) => {
+                let genesis_time = self.store.config.genesis_time;
+                let interval_index = u64::from(interval as u8);
+                let current_time =
+                    genesis_time + slot * SECONDS_PER_SLOT + interval_index * SECONDS_PER_INTERVAL;
+
+                on_tick(&mut self.store, current_time, false);
+
+                debug!(slot, interval = ?interval, store_time = self.store.time, "Chain tick processed");
+
+                let num_validators = self
+                    .store
+                    .states
+                    .get(&self.store.head)
+                    .map(|s| s.validators.len_u64())
+                    .unwrap_or(0);
+
+                ServiceOutput {
+                    messages: vec![Message::Validator(ValidatorMessage::SlotData {
+                        slot: Slot(slot),
+                        interval,
+                        num_validators,
+                        attestation_data: self.attestation_data(Slot(slot)),
+                    })],
+                    effects: vec![],
+                }
+            }
+
+            // ── Block production flow ────────────────────────────────────────
+            //
+            // ValidatorService determined it's the proposer and asks us to
+            // build a block. We insert it into the store, then hand it back
+            // with fresh attestation data so the proposer can sign and gossip.
+            ServiceInput::Message(ChainMessage::ProduceBlock { slot, proposer_idx }) => {
+                match produce_block_with_signatures(&mut self.store, slot, proposer_idx) {
+                    Ok((block_root, block, signatures)) => {
+                        info!(
+                            slot = slot.0,
+                            block_root = %format_args!("0x{block_root:x}"),
+                            proposer = proposer_idx,
+                            "Block produced and stored",
+                        );
+
+                        // Recompute attestation data after block insertion so the
+                        // proposer's attestation reflects the updated chain head.
+                        ServiceOutput {
+                            messages: vec![Message::Validator(ValidatorMessage::BlockProduced {
+                                block,
+                                block_root,
+                                signatures,
+                                attestation_data: self.attestation_data(slot),
+                            })],
+                            effects: vec![],
+                        }
+                    }
+                    Err(err) => {
+                        warn!(%err, slot = slot.0, proposer = proposer_idx, "Failed to produce block");
+                        ServiceOutput { messages: vec![], effects: vec![] }
+                    }
+                }
+            }
+
+            // ── Attestation flow ─────────────────────────────────────────────
+            //
+            // ValidatorService produced an attestation; feed it into fork
+            // choice. No response needed — fork choice updates silently.
+            ServiceInput::Message(ChainMessage::ProcessAttestation(att)) => {
+                let validator_id = att.validator_id;
+                if let Err(err) = on_attestation(&mut self.store, att, false) {
+                    warn!(%err, validator = validator_id, "Failed to process attestation in store");
+                }
+                ServiceOutput { messages: vec![], effects: vec![] }
+            }
+        }
     }
 }
