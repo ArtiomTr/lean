@@ -2,11 +2,10 @@
 members = [
     "chain",
     "containers",
-    "env-config",
+    "eth3_libp2p",
     "fork_choice",
     "http_api",
     "metrics",
-    "networking",
     "runtime",
     "validator",
     "xmss",

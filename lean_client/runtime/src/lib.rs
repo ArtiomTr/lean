@@ -5,10 +5,10 @@ mod chain;
 mod clock;
 mod environment;
 mod event;
-pub mod network;
-pub mod node;
+mod network;
+mod node;
 mod service;
-pub mod simulator;
+mod simulator;
 mod validator;
 
 pub use environment::{Effect, Event, NetworkEvent};

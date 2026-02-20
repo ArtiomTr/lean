@@ -1,0 +1,62 @@
+[package]
+name = 'eth3_libp2p'
+version = '0.2.0'
+authors = [
+    'Grandine Team <info@grandine.io>',
+    'Sigma Prime <contact@sigmaprime.io>',
+]
+edition = { workspace = true }
+
+[dependencies]
+alloy-rlp = { workspace = true }
+anyhow = { workspace = true }
+bls = { workspace = true }
+bytes = { workspace = true }
+delay_map = { workspace = true }
+dirs = { workspace = true }
+discv5 = { workspace = true }
+eip_7594 = { workspace = true }
+either = { workspace = true }
+enum-iterator = { workspace = true }
+fnv = { workspace = true }
+futures = { workspace = true }
+gossipsub = { workspace = true }
+grandine_version = { workspace = true }
+helper_functions = { workspace = true }
+hex = { workspace = true }
+itertools = { workspace = true }
+libp2p = { workspace = true }
+libp2p-mplex = { workspace = true }
+local-ip-address = { workspace = true }
+logging = { workspace = true }
+lru = { workspace = true }
+parking_lot = { workspace = true }
+prometheus = { workspace = true }
+prometheus-client = { workspace = true }
+rand = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
+smallvec = { workspace = true }
+snap = { workspace = true }
+ssz = { workspace = true }
+std_ext = { workspace = true }
+strum = { workspace = true }
+tiny-keccak = { workspace = true }
+tokio = { workspace = true }
+tokio-io-timeout = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+try_from_iterator = { workspace = true }
+typenum = { workspace = true }
+types = { workspace = true }
+unsigned-varint = { workspace = true }
+
+[dev-dependencies]
+quickcheck = { workspace = true }
+quickcheck_macros = { workspace = true }
+tempfile = { workspace = true }
+
+[features]
+libp2p-websocket = []
