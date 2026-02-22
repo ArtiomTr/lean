@@ -8,11 +8,11 @@ pub mod service;
 mod defaults;
 mod misc;
 mod task_executor;
+mod version;
 
 pub mod common;
 pub mod discovery;
 pub mod listen_addr;
-pub mod metrics;
 pub mod peer_manager;
 pub mod rpc;
 pub mod types;
@@ -112,8 +112,6 @@ pub use crate::types::{
     Enr, EnrSyncCommitteeBitfield, GossipTopic, NetworkGlobals, PubsubMessage, Subnet,
     SubnetDiscovery,
 };
-
-pub use prometheus_client;
 
 pub use config::Config as NetworkConfig;
 pub use discovery::{CombinedKeyExt, EnrExt, Eth2Enr};

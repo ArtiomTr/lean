@@ -10,7 +10,6 @@ use futures::future::Either;
 use gossipsub;
 use libp2p::core::{multiaddr::Multiaddr, muxing::StreamMuxerBox, transport::Boxed};
 use libp2p::identity::{Keypair, secp256k1};
-use libp2p::metrics::Registry;
 use libp2p::{PeerId, Transport, core, noise, yamux};
 use ssz::SszReadDefault;
 use std::collections::HashSet;
@@ -29,37 +28,28 @@ pub const NETWORK_KEY_FILENAME: &str = "key";
 /// The filename to store our local metadata.
 pub const METADATA_FILENAME: &str = "metadata";
 
-pub struct Context<'a> {
+pub struct Context {
     pub chain_config: Arc<ChainConfig>,
     pub config: Arc<NetworkConfig>,
     pub enr_fork_id: EnrForkId,
     pub fork_context: Arc<ForkContext>,
-    pub libp2p_registry: Option<&'a mut Registry>,
 }
 
 type BoxedTransport = Boxed<(PeerId, StreamMuxerBox)>;
 
 /// The implementation supports TCP/IP, QUIC (experimental) over UDP, noise as the encryption layer, and
-/// mplex/yamux as the multiplexing layer (when using TCP).
+/// yamux as the multiplexing layer (when using TCP).
 pub fn build_transport(
     local_private_key: Keypair,
     quic_support: bool,
 ) -> std::io::Result<BoxedTransport> {
-    // mplex config
-    let mut mplex_config = libp2p_mplex::Config::new();
-    mplex_config.set_max_buffer_size(256);
-    mplex_config.set_max_buffer_behaviour(libp2p_mplex::MaxBufferBehaviour::Block);
-
     // yamux config
     let yamux_config = yamux::Config::default();
     // Creates the TCP transport layer
     let tcp = libp2p::tcp::tokio::Transport::new(libp2p::tcp::Config::default().nodelay(true))
         .upgrade(core::upgrade::Version::V1)
         .authenticate(generate_noise_config(&local_private_key))
-        .multiplex(core::upgrade::SelectUpgrade::new(
-            yamux_config,
-            mplex_config,
-        ))
+        .multiplex(yamux_config)
         .timeout(Duration::from_secs(10));
     let transport = if quic_support {
         // Enables Quic
@@ -325,18 +315,8 @@ pub(crate) fn create_whitelist_filter(
         use GossipKind::*;
         add(BeaconBlock);
         add(BeaconAggregateAndProof);
-        add(VoluntaryExit);
-        add(ProposerSlashing);
-        add(AttesterSlashing);
-        add(SignedContributionAndProof);
-        add(BlsToExecutionChange);
-        add(LightClientFinalityUpdate);
-        add(LightClientOptimisticUpdate);
         for id in 0..attestation_subnet_count {
             add(Attestation(id));
-        }
-        for id in 0..sync_committee_subnet_count {
-            add(SyncCommitteeMessage(id));
         }
         let blob_subnet_count = if chain_config.electra_fork_epoch != FAR_FUTURE_EPOCH {
             chain_config.blob_sidecar_subnet_count_electra.get()

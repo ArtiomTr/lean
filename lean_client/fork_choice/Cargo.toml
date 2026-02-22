@@ -4,16 +4,14 @@ edition = { workspace = true }
 
 [dependencies]
 anyhow = { workspace = true }
+bls = { workspace = true }
 containers = { workspace = true }
-env-config = { workspace = true }
 metrics = { workspace = true }
 ssz = { workspace = true }
 tracing = { workspace = true }
 xmss = { workspace = true }
 
 [dev-dependencies]
-rand = { workspace = true }
-rand_chacha = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 test-generator = { workspace = true }

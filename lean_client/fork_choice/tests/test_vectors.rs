@@ -4,13 +4,10 @@ use containers::{
     JustificationRoots, JustificationValidators, JustifiedSlots, SignedBlockWithAttestation, Slot,
     State, Validator, Validators,
 };
-use fork_choice::{
-    handlers::{on_block, on_tick},
-    store::{Store, get_forkchoice_store},
-};
+use fork_choice::Store;
 
 use serde::Deserialize;
-use ssz::{H256, SszHash};
+use ssz::{SszHash, H256};
 use std::{collections::HashMap, fs::File};
 use std::{panic::AssertUnwindSafe, path::Path};
 use test_generator::test_resources;
@@ -440,7 +437,11 @@ fn verify_checks(
 
     if let Some(expected_slot) = checks.head_slot {
         // Per devnet-2, store.blocks now contains Block (not SignedBlockWithAttestation)
-        let actual_slot = store.blocks[&store.head].slot.0;
+        let actual_slot = store
+            .blocks()
+            .get(&store.head())
+            .map(|b| b.slot.0)
+            .unwrap_or(0);
         if actual_slot != expected_slot {
             return Err(format!(
                 "Step {}: Head slot mismatch - expected {}, got {}",
@@ -453,11 +454,15 @@ fn verify_checks(
         let expected_root = block_labels
             .get(label)
             .ok_or_else(|| format!("Step {}: Block label '{}' not found", step_idx, label))?;
-        if &store.head != expected_root {
+        if &store.head() != expected_root {
             // Per devnet-2, store.blocks now contains Block (not SignedBlockWithAttestation)
-            let actual_slot = store.blocks.get(&store.head).map(|b| b.slot.0).unwrap_or(0);
+            let actual_slot = store
+                .blocks()
+                .get(&store.head())
+                .map(|b| b.slot.0)
+                .unwrap_or(0);
             let expected_slot = store
-                .blocks
+                .blocks()
                 .get(expected_root)
                 .map(|b| b.slot.0)
                 .unwrap_or(0);
@@ -467,8 +472,8 @@ fn verify_checks(
                 label,
                 expected_slot,
                 actual_slot,
-                store.latest_known_attestations.len(),
-                store.latest_new_attestations.len()
+                store.latest_known_attestations().len(),
+                store.latest_new_attestations().len()
             ));
         }
     }
@@ -479,7 +484,7 @@ fn verify_checks(
 
             match check.location.as_str() {
                 "new" => {
-                    if !store.latest_new_attestations.contains_key(&validator) {
+                    if !store.latest_new_attestations().contains_key(&validator) {
                         return Err(format!(
                             "Step {}: Expected validator {} in new attestations, but not found",
                             step_idx, check.validator
@@ -487,7 +492,7 @@ fn verify_checks(
                     }
                     if let Some(target_slot) = check.target_slot {
                         // Per devnet-2, store now holds AttestationData directly (not SignedAttestation)
-                        let attestation_data = &store.latest_new_attestations[&validator];
+                        let attestation_data = &store.latest_new_attestations()[&validator];
                         if attestation_data.target.slot.0 != target_slot {
                             return Err(format!(
                                 "Step {}: Validator {} new attestation target slot mismatch - expected {}, got {}",
@@ -500,7 +505,7 @@ fn verify_checks(
                     }
                 }
                 "known" => {
-                    if !store.latest_known_attestations.contains_key(&validator) {
+                    if !store.latest_known_attestations().contains_key(&validator) {
                         return Err(format!(
                             "Step {}: Expected validator {} in known attestations, but not found",
                             step_idx, check.validator
@@ -546,7 +551,7 @@ fn forkchoice(spec_file: &str) {
             body_root,
         };
 
-        let mut store = get_forkchoice_store(anchor_state, anchor_block, config);
+        let mut store = Store::new(anchor_state, anchor_block, config);
         let mut block_labels: HashMap<String, H256> = HashMap::new();
 
         for (step_idx, step) in case.steps.into_iter().enumerate() {
@@ -569,10 +574,10 @@ fn forkchoice(spec_file: &str) {
                         // Advance time to the block's slot to ensure attestations are processable
                         // SECONDS_PER_SLOT is 4 (not 12)
                         let block_time =
-                            store.config.genesis_time + (signed_block.message.block.slot.0 * 4);
-                        on_tick(&mut store, block_time, false);
+                            store.config().genesis_time + (signed_block.message.block.slot.0 * 4);
+                        store.on_tick(block_time, false);
 
-                        on_block(&mut store, signed_block).unwrap();
+                        store.on_block(signed_block).unwrap();
                         Ok(block_root)
                     }));
 
@@ -609,7 +614,7 @@ fn forkchoice(spec_file: &str) {
                         .tick
                         .or(step.time)
                         .expect(&format!("Step {step_idx}: Missing tick/time data"));
-                    on_tick(&mut store, time_value, false);
+                    store.on_tick(time_value, false);
 
                     if step.valid {
                         verify_checks(&store, &step.checks, &block_labels, step_idx).expect(
@@ -629,7 +634,7 @@ fn forkchoice(spec_file: &str) {
                 //             message: attestation,
                 //             signature: Signature::default(),
                 //         };
-                //         on_attestation(&mut store, signed_attestation, false)
+                //         store.on_attestation(signed_attestation, false)
                 //     }));
 
                 //     let result = match result {

@@ -8,14 +8,14 @@ pub(crate) mod enr;
 pub mod enr_ext;
 
 // Allow external use of the ENR builder
-use crate::{ClearDialError, metrics};
+use crate::ClearDialError;
 use crate::{Enr, NetworkConfig, NetworkGlobals, Subnet, SubnetDiscovery};
 use discv5::{Discv5, enr::NodeId};
 pub use enr::{CombinedKey, Eth2Enr, build_enr, load_enr_from_disk, use_or_load_enr};
 pub use enr_ext::{CombinedKeyExt, EnrExt, peer_id_to_node_id};
 pub use libp2p::identity::{Keypair, PublicKey};
 
-use alloy_rlp::bytes::Bytes;
+use bytes::Bytes;
 use anyhow::{Error, Result, anyhow};
 use enr::{
     ATTESTATION_BITFIELD_ENR_KEY, ETH2_ENR_KEY, NEXT_FORK_DIGEST_ENR_KEY,
@@ -682,14 +682,13 @@ impl<P: Preset> Discovery<P> {
             }
         }
         if !found {
-            // update the metrics and insert into the queue.
+            // insert into the queue.
             trace!(?subnet, retries, "Queuing subnet query");
             self.queued_queries.push_back(SubnetQuery {
                 subnet,
                 min_ttl,
                 retries,
             });
-            metrics::set_gauge(&metrics::DISCOVERY_QUEUE, self.queued_queries.len() as i64);
         }
     }
 
@@ -723,8 +722,6 @@ impl<P: Preset> Discovery<P> {
                 }
             }
         }
-        // Update the queue metric
-        metrics::set_gauge(&metrics::DISCOVERY_QUEUE, self.queued_queries.len() as i64);
         processed
     }
 
@@ -899,18 +896,6 @@ impl<P: Preset> Discovery<P> {
 
                         // Map each subnet query's min_ttl to the set of ENR's returned for that subnet.
                         queries.iter().for_each(|query| {
-                            let query_str = match query.subnet {
-                                Subnet::Attestation(_) => "attestation",
-                                Subnet::SyncCommittee(_) => "sync_committee",
-                                Subnet::DataColumn(_) => "data_column",
-                            };
-
-                            if let Some(v) = crate::common::metrics::get_int_counter(
-                                &metrics::TOTAL_SUBNET_QUERIES,
-                                &[query_str],
-                            ) {
-                                v.inc();
-                            }
                             // A subnet query has completed. Add back to the queue, incrementing retries.
                             self.add_subnet_query(query.subnet, query.min_ttl, query.retries + 1);
 
@@ -924,12 +909,6 @@ impl<P: Preset> Discovery<P> {
                                 .into_iter()
                                 .filter(|enr| subnet_predicate(enr))
                                 .for_each(|enr| {
-                                    if let Some(v) = metrics::get_int_counter(
-                                        &metrics::SUBNET_PEERS_FOUND,
-                                        &[query_str],
-                                    ) {
-                                        v.inc();
-                                    }
                                     let other_min_ttl = mapped_results.get_mut(&enr);
 
                                     // map peer IDs to the min_ttl furthest in the future
@@ -1077,7 +1056,6 @@ impl<P: Preset> NetworkBehaviour for Discovery<P> {
                         }
                         discv5::Event::SocketUpdated(socket_addr) => {
                             info!(ip = %socket_addr.ip(), udp_port = %socket_addr.port(),"Address updated");
-                            metrics::inc_counter(&metrics::ADDRESS_UPDATE_COUNT);
                             // Discv5 will have updated our local ENR. We save the updated version
                             // to disk.
 

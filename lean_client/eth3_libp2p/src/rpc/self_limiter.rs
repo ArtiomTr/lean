@@ -3,7 +3,7 @@ use super::{
     config::OutboundRateLimiterConfig,
     rate_limiter::{RPCRateLimiter as RateLimiter, RateLimitedErr},
 };
-use crate::{common::metrics, rpc::rate_limiter::RateLimiterItem};
+use crate::rpc::rate_limiter::RateLimiterItem;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
     collections::{HashMap, VecDeque, hash_map::Entry},
@@ -297,11 +297,7 @@ impl<Id: ReqId, P: Preset> SelfRateLimiter<Id, P> {
         }
 
         // Finally return any queued events.
-        if let Some((peer_id, event, queued_at)) = self.ready_requests.pop() {
-            metrics::observe_duration(
-                &crate::metrics::OUTBOUND_REQUEST_IDLING,
-                timestamp_now().saturating_sub(queued_at),
-            );
+        if let Some((peer_id, event, _queued_at)) = self.ready_requests.pop() {
             return Poll::Ready(BehaviourAction::NotifyHandler {
                 peer_id,
                 handler: NotifyHandler::Any,

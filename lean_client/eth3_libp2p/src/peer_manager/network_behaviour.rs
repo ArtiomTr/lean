@@ -12,12 +12,11 @@ use libp2p::swarm::behaviour::{ConnectionClosed, ConnectionEstablished, DialFail
 use libp2p::swarm::dial_opts::{DialOpts, PeerCondition};
 use libp2p::swarm::dummy::ConnectionHandler;
 use libp2p::swarm::{ConnectionDenied, ConnectionId, NetworkBehaviour, ToSwarm};
-pub use metrics::{NAT_OPEN, set_gauge_vec};
 use tracing::{debug, error, trace};
 
 use crate::discovery::enr_ext::EnrExt;
 use crate::types::SyncState;
-use crate::{ClearDialError, metrics};
+use crate::ClearDialError;
 
 use super::{ConnectingType, PeerManager, PeerManagerEvent};
 
@@ -213,14 +212,6 @@ impl NetworkBehaviour for PeerManager {
             ));
         }
 
-        // We have an inbound connection, this is indicative of having our libp2p NAT ports open. We
-        // distinguish between ipv4 and ipv6 here:
-        match remote_addr.iter().next() {
-            Some(Protocol::Ip4(_)) => set_gauge_vec(&NAT_OPEN, &["libp2p_ipv4"], 1),
-            Some(Protocol::Ip6(_)) => set_gauge_vec(&NAT_OPEN, &["libp2p_ipv6"], 1),
-            _ => {}
-        }
-
         Ok(ConnectionHandler)
     }
 
@@ -270,13 +261,6 @@ impl PeerManager {
             "Connection established"
         );
 
-        // Update the prometheus metrics
-        if self.metrics_enabled {
-            metrics::inc_counter(&metrics::PEER_CONNECT_EVENT_COUNT);
-
-            self.update_peer_count_metrics();
-        }
-
         // NOTE: We don't register peers that we are disconnecting immediately. The network service
         // does not need to know about these peers.
         match endpoint {
@@ -324,13 +308,6 @@ impl PeerManager {
         // reference so that peer manager can track this peer.
         self.inject_disconnect(&peer_id);
 
-        // Update the prometheus metrics
-        if self.metrics_enabled {
-            // Legacy standard metrics.
-            metrics::inc_counter(&metrics::PEER_DISCONNECT_EVENT_COUNT);
-
-            self.update_peer_count_metrics();
-        }
     }
 
     /// A dial attempt has failed.

@@ -1,5 +1,4 @@
 use crate::PeerId;
-use crate::common::metrics;
 use crate::rpc::config::InboundRateLimiterConfig;
 use crate::rpc::rate_limiter::{RPCRateLimiter, RateLimitedErr};
 use crate::rpc::self_limiter::timestamp_now;
@@ -148,10 +147,6 @@ impl<P: Preset> ResponseLimiter<P> {
                         response.protocol,
                     ) {
                         Ok(()) => {
-                            metrics::observe_duration(
-                                &crate::metrics::RESPONSE_IDLING,
-                                timestamp_now().saturating_sub(response.queued_at),
-                            );
                             responses.push(response)
                         }
                         Err(wait_time) => {

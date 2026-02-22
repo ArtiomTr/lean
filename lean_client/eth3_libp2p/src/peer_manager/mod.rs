@@ -3,11 +3,10 @@
 use crate::common::time_cache::LRUTimeCache;
 use crate::discovery::{enr_ext::EnrExt, peer_id_to_node_id};
 use crate::rpc::{GoodbyeReason, MetaData, Protocol, RPCError, RpcErrorResponse};
-use crate::{Gossipsub, NetworkGlobals, PeerId, Subnet, SubnetDiscovery, metrics};
+use crate::{Gossipsub, NetworkGlobals, PeerId, Subnet, SubnetDiscovery};
 use anyhow::Result;
 use delay_map::HashSetDelay;
 use discv5::Enr;
-use eip_7594::{compute_subnets_from_custody_group, get_custody_groups};
 use libp2p::identify::Info as IdentifyInfo;
 use peerdb::{BanOperation, BanResult, ScoreUpdateResult};
 use rand::seq::SliceRandom;
@@ -17,7 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tracing::{debug, error, trace, warn};
-use types::{fulu::primitives::CustodyIndex, phase0::primitives::SubnetId, preset::Preset};
+use types::{phase0::primitives::SubnetId, preset::Preset};
 
 pub use libp2p::core::Multiaddr;
 pub use libp2p::identity::Keypair;
@@ -39,7 +38,6 @@ struct PeerSubnetInfo {
     info: PeerInfo,
     attestation_subnets: HashSet<SubnetId>,
     sync_committees: HashSet<SubnetId>,
-    custody_subnets: HashSet<SubnetId>,
 }
 
 pub mod config;
@@ -110,8 +108,6 @@ pub struct PeerManager {
     /// discovery queries for subnet peers if we disconnect from existing sync
     /// committee subnet peers.
     sync_committee_subnets: HashMap<SubnetId, Instant>,
-    /// A mapping of all custody groups to column subnets to avoid re-computation.
-    subnets_by_custody_group: HashMap<CustodyIndex, Vec<SubnetId>>,
     /// The heartbeat interval to perform routine maintenance.
     heartbeat: tokio::time::Interval,
     /// Keeps track of whether the discovery service is enabled or not.
@@ -393,7 +389,6 @@ impl PeerManager {
                 results = results_count,
                 "Skipping recursive discovery query after finding no useful results"
             );
-            metrics::inc_counter(&metrics::DISCOVERY_NO_USEFUL_ENRS);
         } else {
             // Queue another discovery if we need to
             self.maintain_peer_count(to_dial_peers);
@@ -522,14 +517,6 @@ impl PeerManager {
         let client = self.network_globals.client(peer_id);
         let score = self.network_globals.peers.read().score(peer_id);
         debug!(%protocol, %err, %client, %peer_id, %score, ?direction, "RPC Error");
-        crate::common::metrics::inc_counter_vec(
-            &metrics::TOTAL_RPC_ERRORS_PER_CLIENT,
-            &[
-                client.kind.as_ref(),
-                err.as_static_str(),
-                direction.as_ref(),
-            ],
-        );
 
         // Map this error to a `PeerAction` (if any)
         let peer_action = match err {
@@ -1432,9 +1419,6 @@ impl PeerManager {
             self.handle_score_action(&peer_id, action, None);
         }
 
-        // Update peer score metrics;
-        self.update_peer_score_metrics();
-
         // Maintain minimum count for custody peers if we are subscribed to any data column topics (i.e. PeerDAS activated)
         let peerdas_enabled = self
             .network_globals
@@ -1469,201 +1453,9 @@ impl PeerManager {
         self.sync_committee_subnets.shrink_to_fit();
     }
 
-    // Update metrics related to peer scoring.
-    fn update_peer_score_metrics(&self) {
-        if !self.metrics_enabled {
-            return;
-        }
-        // reset the gauges
-        let _ = metrics::PEER_SCORE_DISTRIBUTION
-            .as_ref()
-            .map(|gauge| gauge.reset());
-        let _ = metrics::PEER_SCORE_PER_CLIENT
-            .as_ref()
-            .map(|gauge| gauge.reset());
-
-        let mut avg_score_per_client: HashMap<String, (f64, usize)> = HashMap::with_capacity(5);
-        {
-            let peers_db_read_lock = self.network_globals.peers.read();
-            let connected_peers = peers_db_read_lock.best_peers_by_status(PeerInfo::is_connected);
-            let total_peers = connected_peers.len();
-            for (id, (_peer, peer_info)) in connected_peers.into_iter().enumerate() {
-                // First quartile
-                if id == 0 {
-                    crate::common::metrics::set_gauge_vec(
-                        &metrics::PEER_SCORE_DISTRIBUTION,
-                        &["1st"],
-                        peer_info.score().score() as i64,
-                    );
-                } else if id == (total_peers * 3 / 4).saturating_sub(1) {
-                    crate::common::metrics::set_gauge_vec(
-                        &metrics::PEER_SCORE_DISTRIBUTION,
-                        &["3/4"],
-                        peer_info.score().score() as i64,
-                    );
-                } else if id == (total_peers / 2).saturating_sub(1) {
-                    crate::common::metrics::set_gauge_vec(
-                        &metrics::PEER_SCORE_DISTRIBUTION,
-                        &["1/2"],
-                        peer_info.score().score() as i64,
-                    );
-                } else if id == (total_peers / 4).saturating_sub(1) {
-                    crate::common::metrics::set_gauge_vec(
-                        &metrics::PEER_SCORE_DISTRIBUTION,
-                        &["1/4"],
-                        peer_info.score().score() as i64,
-                    );
-                } else if id == total_peers.saturating_sub(1) {
-                    crate::common::metrics::set_gauge_vec(
-                        &metrics::PEER_SCORE_DISTRIBUTION,
-                        &["last"],
-                        peer_info.score().score() as i64,
-                    );
-                }
-
-                let score_peers = avg_score_per_client
-                    .entry(peer_info.client().kind.to_string())
-                    .or_default();
-                score_peers.0 += peer_info.score().score();
-                score_peers.1 += 1;
-            }
-        } // read lock ended
-
-        for (client, (score, peers)) in avg_score_per_client {
-            crate::common::metrics::set_float_gauge_vec(
-                &metrics::PEER_SCORE_PER_CLIENT,
-                &[&client.to_string()],
-                score / (peers as f64),
-            );
-        }
-    }
-
     // Update peer count related metrics.
     fn update_peer_count_metrics(&self) {
-        let mut peers_connected = 0;
-        let mut clients_per_peer = HashMap::new();
-        let mut inbound_ipv4_peers_connected: usize = 0;
-        let mut inbound_ipv6_peers_connected: usize = 0;
-        let mut peers_connected_multi: HashMap<(&str, &str), i32> = HashMap::new();
-        let mut peers_per_custody_group_count: HashMap<u64, i64> = HashMap::new();
-
-        for (_, peer_info) in self.network_globals.peers.read().connected_peers() {
-            peers_connected += 1;
-
-            *clients_per_peer
-                .entry(peer_info.client().kind.to_string())
-                .or_default() += 1;
-
-            let direction = match peer_info.connection_direction() {
-                Some(ConnectionDirection::Incoming) => "inbound",
-                Some(ConnectionDirection::Outgoing) => "outbound",
-                None => "none",
-            };
-            // Note: the `transport` is set to `unknown` if the `listening_addresses` list is empty.
-            // This situation occurs when the peer is initially registered in PeerDB, but the peer
-            // info has not yet been updated at `PeerManager::identify`.
-            let transport = peer_info
-                .listening_addresses()
-                .iter()
-                .find_map(|addr| {
-                    addr.iter().find_map(|proto| match proto {
-                        multiaddr::Protocol::QuicV1 => Some("quic"),
-                        multiaddr::Protocol::Tcp(_) => Some("tcp"),
-                        _ => None,
-                    })
-                })
-                .unwrap_or("unknown");
-            *peers_connected_multi
-                .entry((direction, transport))
-                .or_default() += 1;
-
-            if let Some(MetaData::V3(meta_data)) = peer_info.meta_data() {
-                *peers_per_custody_group_count
-                    .entry(meta_data.custody_group_count)
-                    .or_default() += 1;
-            }
-            // Check if incoming peer is ipv4
-            if peer_info.is_incoming_ipv4_connection() {
-                inbound_ipv4_peers_connected += 1;
-            }
-
-            // Check if incoming peer is ipv6
-            if peer_info.is_incoming_ipv6_connection() {
-                inbound_ipv6_peers_connected += 1;
-            }
-        }
-
-        // Set ipv4 nat_open metric flag if threshold of peercount is met, unset if below threshold
-        if inbound_ipv4_peers_connected >= LIBP2P_NAT_OPEN_THRESHOLD {
-            metrics::set_gauge_vec(&metrics::NAT_OPEN, &["libp2p_ipv4"], 1);
-        } else {
-            metrics::set_gauge_vec(&metrics::NAT_OPEN, &["libp2p_ipv4"], 0);
-        }
-
-        // Set ipv6 nat_open metric flag if threshold of peercount is met, unset if below threshold
-        if inbound_ipv6_peers_connected >= LIBP2P_NAT_OPEN_THRESHOLD {
-            metrics::set_gauge_vec(&metrics::NAT_OPEN, &["libp2p_ipv6"], 1);
-        } else {
-            metrics::set_gauge_vec(&metrics::NAT_OPEN, &["libp2p_ipv6"], 0);
-        }
-
-        // PEERS_CONNECTED
-        metrics::set_gauge(&metrics::PEERS_CONNECTED, peers_connected);
-
-        // CUSTODY_GROUP_COUNT
-        for (custody_group_count, peer_count) in peers_per_custody_group_count.into_iter() {
-            metrics::set_gauge_vec(
-                &metrics::PEERS_PER_CUSTODY_GROUP_COUNT,
-                &[&custody_group_count.to_string()],
-                peer_count,
-            )
-        }
-
-        // PEERS_PER_CLIENT
-        for client_kind in ClientKind::iter() {
-            let value = clients_per_peer.get(&client_kind.to_string()).unwrap_or(&0);
-            metrics::set_gauge_vec(
-                &metrics::PEERS_PER_CLIENT,
-                &[client_kind.as_ref()],
-                *value as i64,
-            );
-        }
-
-        // PEERS_CONNECTED_MULTI
-        for direction in ["inbound", "outbound", "none"] {
-            for transport in ["quic", "tcp", "unknown"] {
-                metrics::set_gauge_vec(
-                    &metrics::PEERS_CONNECTED_MULTI,
-                    &[direction, transport],
-                    *peers_connected_multi
-                        .get(&(direction, transport))
-                        .unwrap_or(&0) as i64,
-                );
-            }
-        }
-    }
-
-    fn compute_peer_custody_groups(
-        &self,
-        peer_id: &PeerId,
-        custody_group_count: u64,
-    ) -> Result<HashSet<CustodyIndex>, String> {
-        // If we don't have a node id, we cannot compute the custody duties anyway
-        let node_id = peer_id_to_node_id(peer_id)?;
-        let config = &self.network_globals.config;
-
-        if !(config.custody_requirement..=config.number_of_custody_groups)
-            .contains(&custody_group_count)
-        {
-            return Err("Invalid custody group count in metadata: out of range".to_string());
-        }
-
-        get_custody_groups(config, node_id.raw(), custody_group_count).map_err(|e| {
-            format!(
-                "Error computing peer custody groups for node {} with cgc={}: {:?}",
-                node_id, custody_group_count, e
-            )
-        })
+        // Metrics functionality removed
     }
 
     pub fn add_trusted_peer(&mut self, enr: Enr) {

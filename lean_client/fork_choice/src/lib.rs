@@ -1,2 +1,3 @@
-pub mod handlers;
-pub mod store;
+mod store;
+
+pub use store::{Store, INTERVALS_PER_SLOT, SECONDS_PER_INTERVAL, SECONDS_PER_SLOT};

@@ -19,7 +19,7 @@ use crate::types::{
     SubnetDiscovery, all_topics_at_fork, core_topics_to_subscribe, is_fork_non_core_topic,
     subnet_from_topic_hash,
 };
-use crate::{Enr, NetworkGlobals, PubsubMessage, TopicHash, metrics};
+use crate::{Enr, NetworkGlobals, PubsubMessage, TopicHash};
 use crate::{Eth2Enr, task_executor};
 use anyhow::{Error, Result, anyhow};
 use api_types::{AppRequestId, Response};
@@ -181,7 +181,7 @@ impl<P: Preset> Network<P> {
     pub async fn new(
         chain_config: Arc<ChainConfig>,
         executor: task_executor::TaskExecutor,
-        mut ctx: ServiceContext<'_>,
+        mut ctx: ServiceContext,
         custody_group_count: u64,
         local_keypair: Keypair,
     ) -> Result<(Self, Arc<NetworkGlobals>)> {
@@ -367,14 +367,6 @@ impl<P: Preset> Network<P> {
             )
             .map_err(|e| anyhow!("Could not construct gossipsub: {:?}", e))?;
 
-            // If metrics are enabled for libp2p build the configuration
-            if let Some(ref mut registry) = ctx.libp2p_registry {
-                gossipsub = gossipsub.with_metrics(
-                    registry.sub_registry_with_prefix("gossipsub"),
-                    Default::default(),
-                );
-            }
-
             gossipsub
                 .with_peer_score(params, thresholds)
                 .expect("Valid score params and thresholds");
@@ -382,14 +374,6 @@ impl<P: Preset> Network<P> {
             // Mark trusted peers as explicit.
             for explicit_peer in config.trusted_peers.iter() {
                 gossipsub.add_explicit_peer(&PeerId::from(explicit_peer.clone()));
-            }
-
-            // If we are using metrics, then register which topics we want to make sure to keep
-            // track of
-            if ctx.libp2p_registry.is_some() {
-                for topics in all_topics_for_forks {
-                    gossipsub.register_topics_for_metrics(topics);
-                }
             }
 
             (gossipsub, update_gossipsub_scores)
@@ -428,9 +412,7 @@ impl<P: Preset> Network<P> {
                 .with_cache_size(0)
             } else {
                 identify::Config::new("eth2/1.0.0".into(), local_public_key)
-                    .with_agent_version(
-                        grandine_version::APPLICATION_VERSION_WITH_COMMIT_AND_PLATFORM.to_owned(),
-                    )
+                    .with_agent_version(crate::version::version_with_platform())
                     .with_cache_size(0)
             };
             identify::Behaviour::new(identify_config)
@@ -512,21 +494,11 @@ impl<P: Preset> Network<P> {
                 .with_other_transport(|_key| transport)
                 .expect("infalible");
 
-            // NOTE: adding bandwidth metrics changes the generics of the swarm, so types diverge
-            if let Some(libp2p_registry) = ctx.libp2p_registry {
-                builder
-                    .with_bandwidth_metrics(libp2p_registry)
-                    .with_behaviour(|_| behaviour)
-                    .expect("infalible")
-                    .with_swarm_config(|_| config)
-                    .build()
-            } else {
-                builder
-                    .with_behaviour(|_| behaviour)
-                    .expect("infalible")
-                    .with_swarm_config(|_| config)
-                    .build()
-            }
+            builder
+                .with_behaviour(|_| behaviour)
+                .expect("infalible")
+                .with_swarm_config(|_| config)
+                .build()
         };
 
         let mut network = Network {
@@ -907,25 +879,6 @@ impl<P: Preset> Network<P> {
                     }
                 }
 
-                // add to metrics
-                match topic.kind() {
-                    GossipKind::Attestation(subnet_id) => {
-                        if let Some(v) = crate::common::metrics::get_int_gauge(
-                            &metrics::FAILED_ATTESTATION_PUBLISHES_PER_SUBNET,
-                            &[&subnet_id.to_string()],
-                        ) {
-                            v.inc()
-                        };
-                    }
-                    kind => {
-                        if let Some(v) = crate::common::metrics::get_int_gauge(
-                            &metrics::FAILED_PUBLISHES_PER_MAIN_TOPIC,
-                            &[&format!("{:?}", kind)],
-                        ) {
-                            v.inc()
-                        };
-                    }
-                }
 
                 if let PublishError::NoPeersSubscribedToTopic = e {
                     self.gossip_cache.insert(topic, message_data);
@@ -942,25 +895,6 @@ impl<P: Preset> Network<P> {
         message_id: MessageId,
         validation_result: MessageAcceptance,
     ) {
-        if let Some(result) = match validation_result {
-            MessageAcceptance::Accept => None,
-            MessageAcceptance::Ignore => Some("ignore"),
-            MessageAcceptance::Reject => Some("reject"),
-        } {
-            if let Some(client) = self
-                .network_globals
-                .peers
-                .read()
-                .peer_info(propagation_source)
-                .map(|info| info.client().kind.as_ref())
-            {
-                crate::common::metrics::inc_counter_vec(
-                    &metrics::GOSSIP_UNACCEPTED_MESSAGES_PER_CLIENT,
-                    &[client, result],
-                )
-            }
-        }
-
         self.gossipsub_mut().report_message_validation_result(
             &message_id,
             propagation_source,
@@ -1368,11 +1302,6 @@ impl<P: Preset> Network<P> {
                             {
                                 Ok(_) => {
                                     debug!(topic = topic_str, "Gossip message published on retry");
-
-                                    metrics::inc_counter_vec(
-                                        &metrics::GOSSIP_LATE_PUBLISH_PER_TOPIC_KIND,
-                                        &[topic_str],
-                                    );
                                 }
                                 Err(PublishError::Duplicate) => {
                                     debug!(
@@ -1380,20 +1309,12 @@ impl<P: Preset> Network<P> {
                                         topic = topic_str,
                                         "Gossip message publish ignored on retry"
                                     );
-                                    metrics::inc_counter_vec(
-                                        &metrics::GOSSIP_FAILED_LATE_PUBLISH_PER_TOPIC_KIND,
-                                        &[topic_str],
-                                    );
                                 }
                                 Err(e) => {
                                     warn!(
                                         topic = topic_str,
                                         error = %e,
                                         "Gossip message publish failed on retry"
-                                    );
-                                    metrics::inc_counter_vec(
-                                        &metrics::GOSSIP_FAILED_LATE_PUBLISH_PER_TOPIC_KIND,
-                                        &[topic_str],
                                     );
                                 }
                             }
@@ -1545,7 +1466,6 @@ impl<P: Preset> Network<P> {
                     RequestType::Status(_) => {
                         // inform the peer manager that we have received a status from a peer
                         self.peer_manager_mut().peer_statusd(&peer_id);
-                        metrics::inc_counter_vec(&metrics::TOTAL_RPC_REQUESTS, &["status"]);
                         // propagate the STATUS message upwards
                         Some(NetworkEvent::RequestReceived {
                             peer_id,
@@ -1566,10 +1486,6 @@ impl<P: Preset> Network<P> {
                             );
                             return None;
                         }
-                        metrics::inc_counter_vec(
-                            &metrics::TOTAL_RPC_REQUESTS,
-                            &["blocks_by_range"],
-                        );
                         Some(NetworkEvent::RequestReceived {
                             peer_id,
                             inbound_request_id,
@@ -1577,7 +1493,6 @@ impl<P: Preset> Network<P> {
                         })
                     }
                     RequestType::BlocksByRoot(_) => {
-                        metrics::inc_counter_vec(&metrics::TOTAL_RPC_REQUESTS, &["blocks_by_root"]);
                         Some(NetworkEvent::RequestReceived {
                             peer_id,
                             inbound_request_id,
@@ -1585,7 +1500,6 @@ impl<P: Preset> Network<P> {
                         })
                     }
                     RequestType::BlobsByRange(_) => {
-                        metrics::inc_counter_vec(&metrics::TOTAL_RPC_REQUESTS, &["blobs_by_range"]);
                         Some(NetworkEvent::RequestReceived {
                             peer_id,
                             inbound_request_id,
@@ -1593,7 +1507,6 @@ impl<P: Preset> Network<P> {
                         })
                     }
                     RequestType::BlobsByRoot(_) => {
-                        metrics::inc_counter_vec(&metrics::TOTAL_RPC_REQUESTS, &["blobs_by_root"]);
                         Some(NetworkEvent::RequestReceived {
                             peer_id,
                             inbound_request_id,
@@ -1601,10 +1514,6 @@ impl<P: Preset> Network<P> {
                         })
                     }
                     RequestType::DataColumnsByRoot(_) => {
-                        metrics::inc_counter_vec(
-                            &metrics::TOTAL_RPC_REQUESTS,
-                            &["data_columns_by_root"],
-                        );
                         Some(NetworkEvent::RequestReceived {
                             peer_id,
                             inbound_request_id,
@@ -1612,10 +1521,6 @@ impl<P: Preset> Network<P> {
                         })
                     }
                     RequestType::DataColumnsByRange(_) => {
-                        metrics::inc_counter_vec(
-                            &metrics::TOTAL_RPC_REQUESTS,
-                            &["data_columns_by_range"],
-                        );
                         Some(NetworkEvent::RequestReceived {
                             peer_id,
                             inbound_request_id,
@@ -1623,10 +1528,6 @@ impl<P: Preset> Network<P> {
                         })
                     }
                     RequestType::LightClientBootstrap(_) => {
-                        metrics::inc_counter_vec(
-                            &metrics::TOTAL_RPC_REQUESTS,
-                            &["light_client_bootstrap"],
-                        );
                         Some(NetworkEvent::RequestReceived {
                             peer_id,
                             inbound_request_id,
@@ -1634,10 +1535,6 @@ impl<P: Preset> Network<P> {
                         })
                     }
                     RequestType::LightClientOptimisticUpdate => {
-                        metrics::inc_counter_vec(
-                            &metrics::TOTAL_RPC_REQUESTS,
-                            &["light_client_optimistic_update"],
-                        );
                         Some(NetworkEvent::RequestReceived {
                             peer_id,
                             inbound_request_id,
@@ -1645,10 +1542,6 @@ impl<P: Preset> Network<P> {
                         })
                     }
                     RequestType::LightClientFinalityUpdate => {
-                        metrics::inc_counter_vec(
-                            &metrics::TOTAL_RPC_REQUESTS,
-                            &["light_client_finality_update"],
-                        );
                         Some(NetworkEvent::RequestReceived {
                             peer_id,
                             inbound_request_id,
@@ -1656,10 +1549,6 @@ impl<P: Preset> Network<P> {
                         })
                     }
                     RequestType::LightClientUpdatesByRange(_) => {
-                        metrics::inc_counter_vec(
-                            &metrics::TOTAL_RPC_REQUESTS,
-                            &["light_client_updates_by_range"],
-                        );
                         Some(NetworkEvent::RequestReceived {
                             peer_id,
                             inbound_request_id,
@@ -1885,13 +1774,8 @@ impl<P: Preset> Network<P> {
                 Some(result) = self.gossip_cache.next() => {
                     match result {
                         Err(e) => warn!(error = e, "Gossip cache error"),
-                        Ok(expired_topic) => {
-                            if let Some(v) = metrics::get_int_counter(
-                                &metrics::GOSSIP_EXPIRED_LATE_PUBLISH_PER_TOPIC_KIND,
-                                &[expired_topic.kind().as_ref()],
-                            ) {
-                                v.inc()
-                            };
+                        Ok(_expired_topic) => {
+                            // Metrics removed
                         }
                     }
                 }

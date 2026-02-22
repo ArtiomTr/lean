@@ -35,8 +35,8 @@ use crate::rpc::rate_limiter::RateLimiterItem;
 use crate::rpc::response_limiter::ResponseLimiter;
 pub use handler::SubstreamId;
 pub use methods::{
-    BlobsByRangeRequest, BlobsByRootRequest, BlocksByRangeRequest, BlocksByRootRequest,
-    GoodbyeReason, LightClientBootstrapRequest, ResponseTermination, RpcErrorResponse,
+    BlocksByRangeRequest, BlocksByRootRequest,
+    GoodbyeReason, ResponseTermination, RpcErrorResponse,
     StatusMessage, StatusMessageV1, StatusMessageV2,
 };
 pub use protocol::{Protocol, RPCError};

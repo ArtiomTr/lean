@@ -1,9 +1,7 @@
-use crate::discovery::enr::PEERDAS_CUSTODY_GROUP_COUNT_ENR_KEY;
-use crate::discovery::{CombinedKey, peer_id_to_node_id};
+use crate::discovery::CombinedKey;
 use crate::{
-    Enr, EnrExt, Gossipsub, PeerId, SyncInfo, metrics, multiaddr::Multiaddr, types::Subnet,
+    Enr, EnrExt, Gossipsub, PeerId, SyncInfo, multiaddr::Multiaddr, types::Subnet,
 };
-use eip_7594::compute_subnets_for_node;
 use helper_functions::misc;
 use itertools::Itertools as _;
 use logging::exception;
@@ -313,79 +311,6 @@ impl PeerDB {
             .map(|(peer_id, _)| peer_id)
     }
 
-    /// Returns an iterator of all good gossipsub peers that are supposed to be custodying
-    /// the given subnet id.
-    pub fn good_custody_subnet_peer(&self, subnet: SubnetId) -> impl Iterator<Item = &PeerId> {
-        self.peers
-            .iter()
-            .filter(move |(_, info)| {
-                // The custody_subnets hashset can be populated via enr or metadata
-                let is_custody_subnet_peer = info.is_assigned_to_custody_subnet(&subnet);
-                info.is_connected()
-                    && info.is_good_gossipsub_peer()
-                    && is_custody_subnet_peer
-                    && info.is_synced_or_advanced()
-            })
-            .map(|(peer_id, _)| peer_id)
-    }
-
-    /// Checks if there is at least one good peer for each specified custody subnet for the given epoch.
-    /// A "good" peer is one that is both connected and synced (or advanced) for the specified epoch.
-    pub fn has_good_custody_range_sync_peer<P: Preset>(
-        &self,
-        subnets: &HashSet<SubnetId>,
-        epoch: Epoch,
-    ) -> bool {
-        let mut remaining_subnets = subnets.clone();
-
-        let good_sync_peers_for_epoch = self.peers.values().filter(|&info| {
-            info.is_connected()
-                && match info.sync_status() {
-                    SyncStatus::Synced { info } | SyncStatus::Advanced { info } => {
-                        let end_slot =
-                            misc::compute_start_slot_at_epoch::<P>(epoch.saturating_add(1))
-                                .saturating_sub(1);
-
-                        info.has_slot(end_slot)
-                    }
-                    SyncStatus::IrrelevantPeer
-                    | SyncStatus::Behind { .. }
-                    | SyncStatus::Unknown => false,
-                }
-        });
-
-        for info in good_sync_peers_for_epoch {
-            for subnet in info.custody_subnets_iter() {
-                if remaining_subnets.remove(subnet) && remaining_subnets.is_empty() {
-                    return true;
-                }
-            }
-        }
-
-        false
-    }
-
-    /// Checks if there are sufficient good peers for a single custody subnet.
-    /// A "good" peer is one that is both connected and synced (or advanced).
-    pub fn has_good_peers_in_custody_subnet(&self, subnet: &SubnetId, target_peers: usize) -> bool {
-        let mut peer_count = 0usize;
-        for info in self
-            .peers
-            .values()
-            .filter(|info| info.is_connected() && info.is_synced_or_advanced())
-        {
-            if info.is_assigned_to_custody_subnet(subnet) {
-                peer_count += 1;
-            }
-
-            if peer_count >= target_peers {
-                return true;
-            }
-        }
-
-        false
-    }
-
     /// Gives the ids of all known disconnected peers.
     pub fn disconnected_peers(&self) -> impl Iterator<Item = &PeerId> {
         self.peers
@@ -649,16 +574,10 @@ impl PeerDB {
         source: ReportSource,
         msg: &'static str,
     ) -> ScoreUpdateResult {
-        crate::common::metrics::inc_counter_vec(&metrics::REPORT_PEER_MSGS, &[msg]);
-
         match self.peers.get_mut(peer_id) {
             Some(info) => {
                 let previous_state = info.score_state();
                 info.apply_peer_action_to_score(action);
-                crate::common::metrics::inc_counter_vec(
-                    &metrics::PEER_ACTION_EVENTS_PER_CLIENT,
-                    &[info.client().kind.as_ref(), action.as_ref(), source.into()],
-                );
                 let result = Self::handle_score_transition(previous_state, peer_id, info);
                 if previous_state == info.score_state() {
                     debug!(
@@ -805,19 +724,10 @@ impl PeerDB {
     }
 
     /// Updates the connection state. MUST ONLY BE USED IN TESTS.
-    pub fn __add_connected_peer_testing_only<P: Preset>(&mut self, supernode: bool) -> PeerId {
+    pub fn __add_connected_peer_testing_only(&mut self) -> PeerId {
         let enr_key = CombinedKey::generate_secp256k1();
-        let mut enr = Enr::builder().build(&enr_key).unwrap();
+        let enr = Enr::builder().build(&enr_key).unwrap();
         let peer_id = enr.peer_id();
-
-        if supernode {
-            enr.insert(
-                PEERDAS_CUSTODY_GROUP_COUNT_ENR_KEY,
-                &self.chain_config.number_of_custody_groups,
-                &enr_key,
-            )
-            .expect("u64 can be encoded");
-        }
 
         self.update_connection_state(
             &peer_id,
@@ -841,24 +751,6 @@ impl PeerDB {
                 },
             },
         );
-
-        if supernode {
-            let peer_info = self.peers.get_mut(&peer_id).expect("peer exists");
-            let all_subnets = (0..self.chain_config.data_column_sidecar_subnet_count)
-                .map(|subnet_id| subnet_id.into())
-                .collect();
-            peer_info.set_custody_subnets(all_subnets);
-        } else {
-            let peer_info = self.peers.get_mut(&peer_id).expect("peer exists");
-            let node_id = peer_id_to_node_id(&peer_id).expect("convert peer_id to node_id");
-            let subnets = compute_subnets_for_node::<P>(
-                &self.chain_config,
-                node_id.raw(),
-                self.chain_config.custody_requirement,
-            )
-            .expect("should compute custody subnets");
-            peer_info.set_custody_subnets(subnets);
-        }
 
         peer_id
     }
