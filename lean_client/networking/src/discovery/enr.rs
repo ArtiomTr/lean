@@ -27,6 +27,8 @@ pub const ETH2_ENR_KEY: &str = "eth2";
 pub const ATTESTATION_BITFIELD_ENR_KEY: &str = "attnets";
 /// The ENR field specifying the sync committee subnet bitfield.
 pub const SYNC_COMMITTEE_BITFIELD_ENR_KEY: &str = "syncnets";
+/// The ENR field specifying the aggregator role flag.
+pub const IS_AGGREGATOR_ENR_KEY: &str = "is_aggregator";
 
 /// Extension trait for ENR's within Eth2.
 pub trait Eth2Enr {
@@ -36,7 +38,7 @@ pub trait Eth2Enr {
     /// The sync committee subnet bitfield associated with the ENR.
     fn sync_committee_bitfield(&self) -> Result<EnrSyncCommitteeBitfield, &'static str>;
 
-    /// The flag
+    /// The aggregator role flag associated with the ENR.
     fn is_aggregator(&self) -> Result<bool, &'static str>;
 
     fn eth2(&self) -> Result<EnrForkId, &'static str>;
@@ -63,28 +65,12 @@ impl Eth2Enr for Enr {
             .map_err(|_| "Could not decode the ENR syncnets bitfield")
     }
 
-    fn custody_group_count(&self, chain_config: &ChainConfig) -> Result<u64, &'static str> {
-        let cgc = self
-            .get_decodable::<u64>(PEERDAS_CUSTODY_GROUP_COUNT_ENR_KEY)
-            .ok_or("ENR custody group count non-existent")?
-            .map_err(|_| "Could not decode the ENR custody group count")?;
+    fn is_aggregator(&self) -> Result<bool, &'static str> {
+        let aggregator = self.get_decodable::<u8>(IS_AGGREGATOR_ENR_KEY)
+            .ok_or("ENR aggregator flag non-existent")?
+            .map_err(|_| "Could not decode the ENR aggregator flag")?;
 
-        if (chain_config.custody_requirement..=chain_config.number_of_custody_groups).contains(&cgc)
-        {
-            Ok(cgc)
-        } else {
-            Err("Invalid custody group count in ENR")
-        }
-    }
-
-    fn next_fork_digest(&self) -> Result<ForkDigest, &'static str> {
-        let nfd_bytes = self
-            .get_decodable::<Bytes>(NEXT_FORK_DIGEST_ENR_KEY)
-            .ok_or("ENR next fork digest non-existent")?
-            .map_err(|_| "Invalid RLP Encoding")?;
-
-        ForkDigest::from_ssz_default(&nfd_bytes)
-            .map_err(|_| "Could not decode the ENR next fork digest")
+        Ok(aggregator == 0x01)
     }
 
     fn eth2(&self) -> Result<EnrForkId, &'static str> {
@@ -176,8 +162,6 @@ pub fn build_or_load_enr<P: Preset>(
         &enr_key,
         config,
         enr_fork_id,
-        custody_group_count,
-        next_fork_digest,
     )?;
 
     use_or_load_enr(&enr_key, &mut local_enr, config)?;
@@ -190,8 +174,6 @@ pub fn build_enr(
     enr_key: &CombinedKey,
     config: &NetworkConfig,
     enr_fork_id: &EnrForkId,
-    custody_group_count: Option<u64>,
-    next_fork_digest: ForkDigest,
 ) -> Result<Enr> {
     let mut builder = discv5::enr::Enr::builder();
     let (maybe_ipv4_address, maybe_ipv6_address) = &config.enr_address;
@@ -280,19 +262,6 @@ pub fn build_enr(
 
     builder.add_value::<Bytes>(SYNC_COMMITTEE_BITFIELD_ENR_KEY, &bitfield.to_ssz()?.into());
 
-    // only set `cgc` and `nfd` if PeerDAS fork (Fulu) epoch has been scheduled
-    if chain_config.is_peerdas_scheduled() {
-        let custody_group_count = if let Some(cgc) = custody_group_count {
-            cgc
-        } else if config.subscribe_all_data_column_subnets {
-            chain_config.number_of_custody_groups
-        } else {
-            chain_config.custody_requirement
-        };
-        builder.add_value(PEERDAS_CUSTODY_GROUP_COUNT_ENR_KEY, &custody_group_count);
-        builder.add_value::<Bytes>(NEXT_FORK_DIGEST_ENR_KEY, &next_fork_digest.to_ssz()?.into());
-    }
-
     builder
         .build(enr_key)
         .map_err(|e| anyhow!("Could not build Local ENR: {:?}", e))
@@ -317,12 +286,11 @@ fn compare_enr(local_enr: &Enr, disk_enr: &Enr) -> bool {
         && (local_enr.udp4().is_none() || local_enr.udp4() == disk_enr.udp4())
         && (local_enr.udp6().is_none() || local_enr.udp6() == disk_enr.udp6())
         // we need the ATTESTATION_BITFIELD_ENR_KEY and SYNC_COMMITTEE_BITFIELD_ENR_KEY and
-        // PEERDAS_CUSTODY_SUBNET_COUNT_ENR_KEY and NEXT_FORK_DIGEST_ENR_KEY key to match,
-        // otherwise we use a new ENR. This will likely only be true for non-validating nodes.
+        // IS_AGGREGATOR_ENR_KEY key to match, otherwise we use a new ENR. This will likely 
+        // only be true for non-validating nodes.
         && local_enr.get_decodable::<Bytes>(ATTESTATION_BITFIELD_ENR_KEY) == disk_enr.get_decodable(ATTESTATION_BITFIELD_ENR_KEY)
         && local_enr.get_decodable::<Bytes>(SYNC_COMMITTEE_BITFIELD_ENR_KEY) == disk_enr.get_decodable(SYNC_COMMITTEE_BITFIELD_ENR_KEY)
-        && local_enr.get_decodable::<u64>(PEERDAS_CUSTODY_GROUP_COUNT_ENR_KEY) == disk_enr.get_decodable(PEERDAS_CUSTODY_GROUP_COUNT_ENR_KEY)
-        && local_enr.get_decodable::<Bytes>(NEXT_FORK_DIGEST_ENR_KEY) == disk_enr.get_decodable(NEXT_FORK_DIGEST_ENR_KEY)
+        && local_enr.get_decodable::<u8>(IS_AGGREGATOR_ENR_KEY) == disk_enr.get_decodable(IS_AGGREGATOR_ENR_KEY)
 }
 
 /// Loads enr from the given directory
@@ -387,8 +355,6 @@ mod test {
             &enr_key,
             &config,
             &enr_fork_id,
-            custody_group_count,
-            ForkDigest::default(),
         )
         .unwrap();
         (enr, enr_key)

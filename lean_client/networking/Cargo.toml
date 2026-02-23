@@ -3,4 +3,10 @@ name = 'networking'
 edition = { workspace = true }
 
 [dependencies]
+alloy-rlp = { workspace = true }
+anyhow = { workspace = true }
+discv5 = { workspace = true }
+ssz = { workspace = true }
+tiny-keccak = { workspace = true }
+tracing = { workspace = true }
 libp2p = { workspace = true }
