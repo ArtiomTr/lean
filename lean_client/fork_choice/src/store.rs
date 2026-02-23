@@ -1,13 +1,16 @@
-use std::collections::HashMap;
+// Allow modulo_one: ATTESTATION_COMMITTEE_COUNT is 1 for devnet but will increase
+#![allow(clippy::modulo_one)]
 
-use anyhow::{anyhow, ensure, Result};
+use std::collections::{HashMap, HashSet};
+
+use anyhow::{Result, anyhow, ensure};
 use containers::{
     AggregatedSignatureProof, AggregationBits, Attestation, AttestationData, Block, Checkpoint,
-    Config, SignatureKey, SignedAggregatedAttestation, SignedAttestation, SignedBlockWithAttestation,
-    Slot, State,
+    Config, SignatureKey, SignedAggregatedAttestation, SignedAttestation,
+    SignedBlockWithAttestation, Slot, State,
 };
 use metrics::set_gauge_u64;
-use ssz::{SszHash, H256};
+use ssz::{H256, SszHash as _};
 use xmss::Signature;
 
 pub type Interval = u64;
@@ -78,11 +81,7 @@ impl Store {
     ///
     /// # Panics
     /// Panics if the anchor block's state root does not match the hash of the provided state.
-    pub fn new(
-        anchor_state: State,
-        anchor_block: Block,
-        validator_id: Option<u64>,
-    ) -> Self {
+    pub fn new(anchor_state: State, anchor_block: Block, validator_id: Option<u64>) -> Self {
         // Compute the SSZ root of the given state
         let computed_state_root = anchor_state.hash_tree_root();
 
@@ -210,7 +209,7 @@ impl Store {
         let finalized_slot = self.latest_finalized.slot;
 
         // Collect stale roots (attestations targeting at or before finalization)
-        let stale_roots: std::collections::HashSet<H256> = self
+        let stale_roots: HashSet<H256> = self
             .attestation_data_by_root
             .iter()
             .filter(|(_, data)| data.target.slot <= finalized_slot)
@@ -354,7 +353,11 @@ impl Store {
             validator_id
         );
 
-        let public_key = &target_state.validators[validator_id as usize].pubkey;
+        let public_key = &target_state
+            .validators
+            .get(validator_id)
+            .expect("validator not found")
+            .pubkey;
 
         // Verify signature
         let data_root = attestation_data.hash_tree_root();
@@ -363,18 +366,16 @@ impl Store {
             .map_err(|e| anyhow!("Signature verification failed: {}", e))?;
 
         // Store signature if aggregator with subnet filtering
-        if is_aggregator {
-            if let Some(my_id) = self.validator_id {
-                let my_subnet = my_id % ATTESTATION_COMMITTEE_COUNT;
-                let attester_subnet = validator_id % ATTESTATION_COMMITTEE_COUNT;
+        if is_aggregator && let Some(my_id) = self.validator_id {
+            let my_subnet = my_id % ATTESTATION_COMMITTEE_COUNT;
+            let attester_subnet = validator_id % ATTESTATION_COMMITTEE_COUNT;
 
-                if my_subnet == attester_subnet {
-                    let sig_key = SignatureKey {
-                        validator_id,
-                        data_root,
-                    };
-                    self.gossip_signatures.insert(sig_key, signature.clone());
-                }
+            if my_subnet == attester_subnet {
+                let sig_key = SignatureKey {
+                    validator_id,
+                    data_root,
+                };
+                self.gossip_signatures.insert(sig_key, signature.clone());
             }
         }
 
@@ -423,7 +424,14 @@ impl Store {
         // Prepare public keys for verification
         let public_keys: Vec<_> = validator_ids
             .iter()
-            .map(|&vid| target_state.validators[vid as usize].pubkey.clone())
+            .map(|&vid| {
+                target_state
+                    .validators
+                    .get(vid)
+                    .expect("validator not found")
+                    .pubkey
+                    .clone()
+            })
             .collect();
 
         // Verify the aggregated proof
@@ -433,7 +441,8 @@ impl Store {
             .map_err(|e| anyhow!("Committee aggregation signature verification failed: {}", e))?;
 
         // Store attestation data by root
-        self.attestation_data_by_root.insert(data_root, data.clone());
+        self.attestation_data_by_root
+            .insert(data_root, data.clone());
 
         // Store in new payloads pool
         for vid in validator_ids {
@@ -595,7 +604,7 @@ impl Store {
         };
 
         // Ceiling division: ceil(n * 2 / 3)
-        let min_score = (n_validators * 2 + 2) / 3;
+        let min_score = (n_validators * 2).div_ceil(3);
 
         // Merge both known and new aggregated payloads for safe target calculation.
         // At interval 3, the interval-4 migration has not yet run, so attestations
@@ -604,7 +613,7 @@ impl Store {
         let mut all_payloads = self.latest_known_aggregated_payloads.clone();
         for (sig_key, proofs) in &self.latest_new_aggregated_payloads {
             all_payloads
-                .entry(*sig_key)
+                .entry(sig_key.clone())
                 .or_default()
                 .extend(proofs.iter().cloned());
         }
@@ -680,7 +689,7 @@ impl Store {
                 let Some(sig) = self.gossip_signatures.get(&sig_key) else {
                     continue;
                 };
-                let Ok(validator) = head_state.validators.get(vid as usize) else {
+                let Ok(validator) = head_state.validators.get(vid) else {
                     continue;
                 };
                 sigs.push(sig.clone());
@@ -885,8 +894,7 @@ impl Store {
             .collect();
 
         // Get known block roots for attestation validation
-        let known_block_roots: std::collections::HashSet<H256> =
-            self.blocks.keys().copied().collect();
+        let known_block_roots: HashSet<H256> = self.blocks.keys().copied().collect();
 
         // Build block with fixed-point attestation collection and signature aggregation
         let (final_block, final_post_state, _aggregated_attestations, signatures) = head_state
@@ -1016,8 +1024,7 @@ impl Store {
 
         // Store proposer signature if it belongs to the same committee subnet
         if let Some(my_id) = self.validator_id {
-            let proposer_subnet =
-                proposer_attestation.validator_id % ATTESTATION_COMMITTEE_COUNT;
+            let proposer_subnet = proposer_attestation.validator_id % ATTESTATION_COMMITTEE_COUNT;
             let current_subnet = my_id % ATTESTATION_COMMITTEE_COUNT;
 
             if proposer_subnet == current_subnet {
@@ -1139,9 +1146,18 @@ mod tests {
     ) -> AttestationData {
         AttestationData {
             slot: Slot(slot),
-            head: Checkpoint { root: head_root, slot: Slot(head_slot) },
-            target: Checkpoint { root: target_root, slot: Slot(target_slot) },
-            source: Checkpoint { root: source_root, slot: Slot(source_slot) },
+            head: Checkpoint {
+                root: head_root,
+                slot: Slot(head_slot),
+            },
+            target: Checkpoint {
+                root: target_root,
+                slot: Slot(target_slot),
+            },
+            source: Checkpoint {
+                root: source_root,
+                slot: Slot(source_slot),
+            },
         }
     }
 
@@ -1242,10 +1258,16 @@ mod tests {
 
         let mut attestations = HashMap::new();
         for i in 0..3 {
-            attestations.insert(i, create_attestation_data(1, block_a_root, 1, genesis_root, 0, genesis_root, 0));
+            attestations.insert(
+                i,
+                create_attestation_data(1, block_a_root, 1, genesis_root, 0, genesis_root, 0),
+            );
         }
         for i in 3..5 {
-            attestations.insert(i, create_attestation_data(1, block_b_root, 1, genesis_root, 0, genesis_root, 0));
+            attestations.insert(
+                i,
+                create_attestation_data(1, block_b_root, 1, genesis_root, 0, genesis_root, 0),
+            );
         }
 
         let head = store.get_fork_choice_head(genesis_root, &attestations, 0);
@@ -1279,7 +1301,10 @@ mod tests {
         store.insert_block(block2_root, block2);
 
         let mut attestations = HashMap::new();
-        attestations.insert(0, create_attestation_data(2, block2_root, 2, genesis_root, 0, genesis_root, 0));
+        attestations.insert(
+            0,
+            create_attestation_data(2, block2_root, 2, genesis_root, 0, genesis_root, 0),
+        );
 
         let head = store.get_fork_choice_head(genesis_root, &attestations, 0);
         assert_eq!(head, block2_root);
@@ -1292,7 +1317,10 @@ mod tests {
         let unknown_root = H256::from_slice(&[0xff; 32]);
 
         let mut attestations = HashMap::new();
-        attestations.insert(0, create_attestation_data(1, unknown_root, 1, genesis_root, 0, genesis_root, 0));
+        attestations.insert(
+            0,
+            create_attestation_data(1, unknown_root, 1, genesis_root, 0, genesis_root, 0),
+        );
 
         let head = store.get_fork_choice_head(genesis_root, &attestations, 0);
         assert_eq!(head, genesis_root);

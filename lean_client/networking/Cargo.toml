@@ -5,7 +5,9 @@ edition = { workspace = true }
 [dependencies]
 alloy-rlp = { workspace = true }
 anyhow = { workspace = true }
+dirs = { workspace = true }
 discv5 = { workspace = true }
+serde = { workspace = true }
 ssz = { workspace = true }
 tiny-keccak = { workspace = true }
 tracing = { workspace = true }
