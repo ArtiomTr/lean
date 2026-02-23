@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use anyhow::{anyhow, ensure, Result};
 use containers::{
-    AggregatedAttestation, AggregatedSignatureProof, Attestation, AttestationData, Block,
-    Checkpoint, Config, SignatureKey, SignedAggregatedAttestation, SignedAttestation,
-    SignedBlockWithAttestation, Slot, State,
+    AggregatedSignatureProof, AggregationBits, Attestation, AttestationData, Block, Checkpoint,
+    Config, SignatureKey, SignedAggregatedAttestation, SignedAttestation, SignedBlockWithAttestation,
+    Slot, State,
 };
 use metrics::set_gauge_u64;
 use ssz::{SszHash, H256};
@@ -12,8 +12,8 @@ use xmss::Signature;
 
 pub type Interval = u64;
 pub const INTERVALS_PER_SLOT: Interval = 5;
-pub const SECONDS_PER_SLOT: u64 = 5;
-pub const SECONDS_PER_INTERVAL: u64 = SECONDS_PER_SLOT / INTERVALS_PER_SLOT;
+pub const SECONDS_PER_SLOT: u64 = 4;
+pub const ATTESTATION_COMMITTEE_COUNT: u64 = 1;
 pub const JUSTIFICATION_LOOKBACK_SLOTS: u64 = 3;
 
 /// Forkchoice store tracking chain state and validator attestations
@@ -63,9 +63,6 @@ pub struct Store {
 
     /// Aggregated signature proofs that have been processed (actively used in fork choice)
     latest_known_aggregated_payloads: HashMap<SignatureKey, Vec<AggregatedSignatureProof>>,
-
-    /// Queue for blocks awaiting parent blocks
-    blocks_queue: HashMap<H256, Vec<SignedBlockWithAttestation>>,
 }
 
 impl Store {
@@ -99,17 +96,11 @@ impl Store {
         let anchor_root = anchor_block.hash_tree_root();
         let anchor_slot = anchor_block.slot;
 
-        // Initialize checkpoints from the anchor state
-        // We explicitly set the root to the anchor block root.
-        // The anchor state internally might have zero-hash checkpoints (if genesis),
-        // but the Store must treat the anchor block as the justified/finalized point.
-        let latest_justified = Checkpoint {
+        // Initialize checkpoints from the anchor block.
+        // Both root and slot come from the anchor block directly.
+        let anchor_checkpoint = Checkpoint {
             root: anchor_root,
-            slot: anchor_state.latest_justified.slot,
-        };
-        let latest_finalized = Checkpoint {
-            root: anchor_root,
-            slot: anchor_state.latest_finalized.slot,
+            slot: anchor_slot,
         };
 
         Store {
@@ -117,8 +108,8 @@ impl Store {
             config: anchor_state.config.clone(),
             head: anchor_root,
             safe_target: anchor_root,
-            latest_justified,
-            latest_finalized,
+            latest_justified: anchor_checkpoint.clone(),
+            latest_finalized: anchor_checkpoint,
             blocks: [(anchor_root, anchor_block)].into(),
             states: [(anchor_root, anchor_state)].into(),
             validator_id,
@@ -126,7 +117,6 @@ impl Store {
             attestation_data_by_root: HashMap::new(),
             latest_new_aggregated_payloads: HashMap::new(),
             latest_known_aggregated_payloads: HashMap::new(),
-            blocks_queue: HashMap::new(),
         }
     }
 
@@ -173,28 +163,27 @@ impl Store {
     }
 
     #[inline]
-    pub fn latest_known_attestations(&self) -> &HashMap<u64, AttestationData> {
-        &self.latest_known_attestations
-    }
-
-    #[inline]
-    pub fn latest_new_attestations(&self) -> &HashMap<u64, AttestationData> {
-        &self.latest_new_attestations
-    }
-
-    #[inline]
-    pub fn blocks_queue(&self) -> &HashMap<H256, Vec<SignedBlockWithAttestation>> {
-        &self.blocks_queue
-    }
-
-    #[inline]
     pub fn gossip_signatures(&self) -> &HashMap<SignatureKey, Signature> {
         &self.gossip_signatures
     }
 
     #[inline]
-    pub fn aggregated_payloads(&self) -> &HashMap<SignatureKey, Vec<AggregatedSignatureProof>> {
-        &self.aggregated_payloads
+    pub fn attestation_data_by_root(&self) -> &HashMap<H256, AttestationData> {
+        &self.attestation_data_by_root
+    }
+
+    #[inline]
+    pub fn latest_new_aggregated_payloads(
+        &self,
+    ) -> &HashMap<SignatureKey, Vec<AggregatedSignatureProof>> {
+        &self.latest_new_aggregated_payloads
+    }
+
+    #[inline]
+    pub fn latest_known_aggregated_payloads(
+        &self,
+    ) -> &HashMap<SignatureKey, Vec<AggregatedSignatureProof>> {
+        &self.latest_known_aggregated_payloads
     }
 
     #[inline]
@@ -221,7 +210,7 @@ impl Store {
         let finalized_slot = self.latest_finalized.slot;
 
         // Collect stale roots (attestations targeting at or before finalization)
-        let stale_roots: Vec<H256> = self
+        let stale_roots: std::collections::HashSet<H256> = self
             .attestation_data_by_root
             .iter()
             .filter(|(_, data)| data.target.slot <= finalized_slot)
@@ -233,9 +222,8 @@ impl Store {
         }
 
         // Remove stale entries from all attestation-related maps
-        for root in &stale_roots {
-            self.attestation_data_by_root.remove(root);
-        }
+        self.attestation_data_by_root
+            .retain(|root, _| !stale_roots.contains(root));
 
         self.gossip_signatures
             .retain(|key, _| !stale_roots.contains(&key.data_root));
@@ -247,142 +235,77 @@ impl Store {
             .retain(|key, _| !stale_roots.contains(&key.data_root));
     }
 
-    /// Check if ancestor is an ancestor of descendant in the block tree.
+    /// Validate incoming attestation before processing.
     ///
-    /// Walks backwards from descendant to see if we reach ancestor.
-    fn is_ancestor(&self, ancestor: H256, descendant: H256) -> Result<bool> {
-        if ancestor == descendant {
-            return Ok(true);
-        }
-
-        let mut current = descendant;
-        loop {
-            let block = self
-                .get_block(&current)
-                .ok_or_else(|| anyhow!("Block not found: {}", current))?;
-
-            if block.parent_root == ancestor {
-                return Ok(true);
-            }
-
-            if block.parent_root.is_zero() {
-                return Ok(false);
-            }
-
-            current = block.parent_root;
-
-            // Prevent infinite loops in case of circular references
-            if current == descendant {
-                return Ok(false);
-            }
-        }
-    }
-
-    /// Validate an attestation according to fork choice rules.
-    ///
-    /// Four validation checks:
-    /// 1. Slot boundary: attestation.data.slot + 1 < current_slot
-    /// 2. Head ancestry: attestation.data.head is ancestor of attestation.data.target
-    /// 3. Source checkpoint: target state's justified matches attestation source
-    /// 4. Target slot: attestation.data.target.slot == attestation.data.slot
+    /// Ensures the vote respects the basic laws of time and topology:
+    /// 1. The blocks voted for must exist in our store.
+    /// 2. A vote cannot span backwards in time (source slot > target slot).
+    /// 3. The head must be at least as recent as target (head >= target).
+    /// 4. Checkpoint slots must match the actual block slots.
+    /// 5. A vote cannot be too far in the future (more than 1 slot ahead).
     pub fn validate_attestation(&self, attestation: &Attestation) -> Result<()> {
-        let current_slot = self.time / INTERVALS_PER_SLOT;
+        let data = &attestation.data;
 
-        // Check 1: Slot boundary
+        // Availability Check: we cannot count a vote if we haven't seen the blocks involved.
         ensure!(
-            attestation.data.slot.0 + 1 < current_slot,
-            "Attestation too recent: slot {} must be < current {}",
-            attestation.data.slot.0,
+            self.blocks.contains_key(&data.source.root),
+            "Unknown source block: {}",
+            data.source.root
+        );
+        ensure!(
+            self.blocks.contains_key(&data.target.root),
+            "Unknown target block: {}",
+            data.target.root
+        );
+        ensure!(
+            self.blocks.contains_key(&data.head.root),
+            "Unknown head block: {}",
+            data.head.root
+        );
+
+        // Topology Check: source <= target <= head.
+        ensure!(
+            data.source.slot <= data.target.slot,
+            "Source checkpoint slot must not exceed target"
+        );
+        ensure!(
+            data.head.slot >= data.target.slot,
+            "Head checkpoint must not be older than target"
+        );
+
+        // Consistency Check: checkpoint slots must match block slots.
+        let source_block = &self.blocks[&data.source.root];
+        let target_block = &self.blocks[&data.target.root];
+        let head_block = &self.blocks[&data.head.root];
+        ensure!(
+            source_block.slot == data.source.slot,
+            "Source checkpoint slot mismatch: block slot {} != checkpoint slot {}",
+            source_block.slot.0,
+            data.source.slot.0
+        );
+        ensure!(
+            target_block.slot == data.target.slot,
+            "Target checkpoint slot mismatch: block slot {} != checkpoint slot {}",
+            target_block.slot.0,
+            data.target.slot.0
+        );
+        ensure!(
+            head_block.slot == data.head.slot,
+            "Head checkpoint slot mismatch: block slot {} != checkpoint slot {}",
+            head_block.slot.0,
+            data.head.slot.0
+        );
+
+        // Time Check: attestation must not be more than 1 slot in the future.
+        let current_slot = self.time / INTERVALS_PER_SLOT;
+        ensure!(
+            data.slot.0 <= current_slot + 1,
+            "Attestation too far in future: slot {} > current {} + 1",
+            data.slot.0,
             current_slot
         );
 
-        // Check 2: Head ancestry (head must be ancestor of target)
-        ensure!(
-            self.is_ancestor(attestation.data.head.root, attestation.data.target.root)?,
-            "Head {} not ancestor of target {}",
-            attestation.data.head.root,
-            attestation.data.target.root
-        );
-
-        // Check 3: Source checkpoint (must match target state's justified)
-        let target_state = self
-            .get_state(&attestation.data.target.root)
-            .ok_or_else(|| anyhow!("Target state not found: {}", attestation.data.target.root))?;
-
-        ensure!(
-            target_state.latest_justified == attestation.data.source,
-            "Invalid source checkpoint"
-        );
-
-        // Check 4: Target slot (must match attestation slot)
-        ensure!(
-            attestation.data.target.slot == attestation.data.slot,
-            "Target slot mismatch: {} != {}",
-            attestation.data.target.slot.0,
-            attestation.data.slot.0
-        );
-
         Ok(())
-    }
-
-    /// Get attestation target for a given head and slot.
-    ///
-    /// Walks backward from head until finding the block at the target slot.
-    /// Returns (target_root, target_slot).
-    fn get_attestation_target(&self, head: H256, slot: Slot) -> Result<(H256, Slot)> {
-        let target_slot = slot; // In Lean, target slot equals attestation slot
-        let mut current = head;
-
-        loop {
-            let block = self
-                .get_block(&current)
-                .ok_or_else(|| anyhow!("Block not found: {}", current))?;
-
-            if block.slot == target_slot {
-                return Ok((current, target_slot));
-            }
-
-            ensure!(
-                block.slot < target_slot,
-                "Target slot {} not found walking back from head {}",
-                target_slot.0,
-                head
-            );
-
-            current = block.parent_root;
-        }
-    }
-
-    /// Produce attestation data for the current slot.
-    ///
-    /// Returns AttestationData with:
-    /// - slot: current slot
-    /// - head: current forkchoice head
-    /// - target: checkpoint at attestation slot
-    /// - source: current justified checkpoint from head state
-    pub fn produce_attestation_data(&self, slot: Slot) -> Result<AttestationData> {
-        let head_root = self.head;
-        let (target_root, target_slot) = self.get_attestation_target(head_root, slot)?;
-
-        let head_state = self
-            .get_state(&head_root)
-            .ok_or_else(|| anyhow!("Head state not found: {}", head_root))?;
-
-        Ok(AttestationData {
-            slot,
-            head: Checkpoint {
-                root: head_root,
-                slot: self
-                    .get_block(&head_root)
-                    .ok_or_else(|| anyhow!("Head block not found: {}", head_root))?
-                    .slot,
-            },
-            target: Checkpoint {
-                root: target_root,
-                slot: target_slot,
-            },
-            source: head_state.latest_justified.clone(),
-        })
     }
 
     // ========== Gossip Attestation Handling ==========
@@ -392,7 +315,8 @@ impl Store {
     /// This method:
     /// 1. Validates the attestation
     /// 2. Verifies the XMSS signature
-    /// 3. If current node is aggregator, stores the signature (with subnet filtering)
+    /// 3. If current node is aggregator, stores the signature if it belongs to
+    ///    the current validator's subnet
     /// 4. Stores attestation data for later extraction
     ///
     /// # Arguments
@@ -407,7 +331,7 @@ impl Store {
         let attestation_data = &signed_attestation.message;
         let signature = &signed_attestation.signature;
 
-        // Validate attestation
+        // Validate attestation first so unknown blocks are rejected cleanly
         let attestation = Attestation {
             validator_id,
             data: attestation_data.clone(),
@@ -430,7 +354,7 @@ impl Store {
             validator_id
         );
 
-        let public_key = &target_state.validators[validator_id as usize].public_key;
+        let public_key = &target_state.validators[validator_id as usize].pubkey;
 
         // Verify signature
         let data_root = attestation_data.hash_tree_root();
@@ -441,8 +365,6 @@ impl Store {
         // Store signature if aggregator with subnet filtering
         if is_aggregator {
             if let Some(my_id) = self.validator_id {
-                // Compute subnets (simple modulo for now - can be made more sophisticated)
-                const ATTESTATION_COMMITTEE_COUNT: u64 = 64;
                 let my_subnet = my_id % ATTESTATION_COMMITTEE_COUNT;
                 let attester_subnet = validator_id % ATTESTATION_COMMITTEE_COUNT;
 
@@ -466,9 +388,8 @@ impl Store {
     /// Process a signed aggregated attestation received via aggregation topic.
     ///
     /// This method:
-    /// 1. Validates the attestation data
-    /// 2. Verifies the aggregated XMSS proof
-    /// 3. Stores the aggregation in latest_new_aggregated_payloads
+    /// 1. Verifies the aggregated attestation
+    /// 2. Stores the aggregation in latest_new_aggregated_payloads
     ///
     /// # Arguments
     /// * `signed_attestation` - The signed aggregated attestation from committee aggregation
@@ -476,25 +397,17 @@ impl Store {
         &mut self,
         signed_attestation: &SignedAggregatedAttestation,
     ) -> Result<()> {
-        let attestation_data = &signed_attestation.message.data;
-        let aggregation_bits = &signed_attestation.message.aggregation_bits;
-        let signature = &signed_attestation.signature;
-
-        // Validate attestation data
-        let attestation = Attestation {
-            validator_id: 0, // Dummy, not used for aggregated
-            data: attestation_data.clone(),
-        };
-        self.validate_attestation(&attestation)?;
+        let data = &signed_attestation.data;
+        let proof = &signed_attestation.proof;
 
         // Get validator IDs who participated
-        let validator_ids = aggregation_bits.to_validator_indices();
+        let validator_ids = proof.get_participant_indices();
 
         // Get state for verification
-        let target_state = self.get_state(&attestation_data.target.root).ok_or_else(|| {
+        let target_state = self.get_state(&data.target.root).ok_or_else(|| {
             anyhow!(
                 "No state available to verify committee aggregation for target {}",
-                attestation_data.target.root
+                data.target.root
             )
         })?;
 
@@ -510,19 +423,17 @@ impl Store {
         // Prepare public keys for verification
         let public_keys: Vec<_> = validator_ids
             .iter()
-            .map(|&vid| target_state.validators[vid as usize].public_key.clone())
+            .map(|&vid| target_state.validators[vid as usize].pubkey.clone())
             .collect();
 
         // Verify the aggregated proof
-        let data_root = attestation_data.hash_tree_root();
-        let proof = AggregatedSignatureProof {
-            participants: aggregation_bits.clone(),
-            proof_data: signature.clone(),
-        };
-
+        let data_root = data.hash_tree_root();
         proof
-            .verify(public_keys, data_root, attestation_data.slot.0 as u32)
+            .verify(public_keys, data_root, data.slot.0 as u32)
             .map_err(|e| anyhow!("Committee aggregation signature verification failed: {}", e))?;
+
+        // Store attestation data by root
+        self.attestation_data_by_root.insert(data_root, data.clone());
 
         // Store in new payloads pool
         for vid in validator_ids {
@@ -535,10 +446,6 @@ impl Store {
                 .or_default()
                 .push(proof.clone());
         }
-
-        // Store attestation data
-        self.attestation_data_by_root
-            .insert(data_root, attestation_data.clone());
 
         Ok(())
     }
@@ -559,50 +466,42 @@ impl Store {
                 .map(|(r, _)| *r)
                 .expect("Error: Empty block.");
         }
-        let mut vote_weights: HashMap<H256, usize> = HashMap::new();
+
         let root_slot = self.blocks[&root].slot;
+        let mut vote_weights: HashMap<H256, usize> = HashMap::new();
 
-        // stage 1: accumulate weights by walking up from each attestation's head
+        // Accumulate weights by walking up from each attestation's head
         for attestation_data in latest_attestations.values() {
-            let mut curr = attestation_data.head.root;
+            let mut current = attestation_data.head.root;
 
-            if let Some(block) = self.blocks.get(&curr) {
-                let mut curr_slot = block.slot;
-
-                while curr_slot > root_slot {
-                    *vote_weights.entry(curr).or_insert(0) += 1;
-
-                    if let Some(parent_block) = self.blocks.get(&curr) {
-                        curr = parent_block.parent_root;
-                        if curr.is_zero() {
-                            break;
-                        }
-                        if let Some(next_block) = self.blocks.get(&curr) {
-                            curr_slot = next_block.slot;
-                        } else {
-                            break;
-                        }
-                    } else {
-                        break;
-                    }
+            while let Some(block) = self.blocks.get(&current) {
+                if block.slot <= root_slot {
+                    break;
+                }
+                *vote_weights.entry(current).or_insert(0) += 1;
+                current = block.parent_root;
+                if current.is_zero() {
+                    break;
                 }
             }
         }
 
-        // stage 2: build adjacency tree (parent -> children)
+        // Build adjacency tree (parent -> children), pruning low-weight branches
         let mut child_map: HashMap<H256, Vec<H256>> = HashMap::new();
         for (block_hash, block) in &self.blocks {
-            if !block.parent_root.is_zero() {
-                if vote_weights.get(block_hash).copied().unwrap_or(0) >= min_votes {
-                    child_map
-                        .entry(block.parent_root)
-                        .or_default()
-                        .push(*block_hash);
-                }
+            if block.parent_root.is_zero() {
+                continue;
             }
+            if min_votes > 0 && vote_weights.get(block_hash).copied().unwrap_or(0) < min_votes {
+                continue;
+            }
+            child_map
+                .entry(block.parent_root)
+                .or_default()
+                .push(*block_hash);
         }
 
-        // stage 3: greedy walk choosing heaviest child at each fork
+        // Greedy walk choosing heaviest child at each fork
         let mut curr = root;
         loop {
             let children = match child_map.get(&curr) {
@@ -622,6 +521,42 @@ impl Store {
         }
     }
 
+    /// Extract attestations from aggregated payloads.
+    ///
+    /// Given a mapping of aggregated signature proofs, extract the attestation data
+    /// for each validator that participated.
+    ///
+    /// Returns a mapping from ValidatorIndex to AttestationData.
+    fn extract_attestations_from_aggregated_payloads(
+        &self,
+        aggregated_payloads: &HashMap<SignatureKey, Vec<AggregatedSignatureProof>>,
+    ) -> HashMap<u64, AttestationData> {
+        let mut attestations: HashMap<u64, AttestationData> = HashMap::new();
+
+        for (sig_key, proofs) in aggregated_payloads {
+            let data_root = sig_key.data_root;
+            let Some(attestation_data) = self.attestation_data_by_root.get(&data_root) else {
+                continue;
+            };
+
+            for proof in proofs {
+                let validator_ids = proof.get_participant_indices();
+                for vid in validator_ids {
+                    attestations
+                        .entry(vid)
+                        .and_modify(|existing| {
+                            if attestation_data.slot > existing.slot {
+                                *existing = attestation_data.clone();
+                            }
+                        })
+                        .or_insert_with(|| attestation_data.clone());
+                }
+            }
+        }
+
+        attestations
+    }
+
     pub fn get_latest_justified(states: &HashMap<H256, State>) -> Option<&Checkpoint> {
         states
             .values()
@@ -630,12 +565,13 @@ impl Store {
     }
 
     pub fn update_head(&mut self) {
-        // Compute new head using LMD-GHOST from latest justified root
-        let new_head = self.get_fork_choice_head(
-            self.latest_justified.root,
-            &self.latest_known_attestations,
-            0,
+        // Extract attestations from known aggregated payloads
+        let attestations = self.extract_attestations_from_aggregated_payloads(
+            &self.latest_known_aggregated_payloads.clone(),
         );
+
+        // Compute new head using LMD-GHOST from latest justified root
+        let new_head = self.get_fork_choice_head(self.latest_justified.root, &attestations, 0);
         self.head = new_head;
 
         let blocks = &self.blocks;
@@ -658,10 +594,25 @@ impl Store {
             0
         };
 
+        // Ceiling division: ceil(n * 2 / 3)
         let min_score = (n_validators * 2 + 2) / 3;
+
+        // Merge both known and new aggregated payloads for safe target calculation.
+        // At interval 3, the interval-4 migration has not yet run, so attestations
+        // in the "new" pool (from block proposers and self-attestations) must be
+        // included to avoid undercounting support.
+        let mut all_payloads = self.latest_known_aggregated_payloads.clone();
+        for (sig_key, proofs) in &self.latest_new_aggregated_payloads {
+            all_payloads
+                .entry(*sig_key)
+                .or_default()
+                .extend(proofs.iter().cloned());
+        }
+
+        let attestations = self.extract_attestations_from_aggregated_payloads(&all_payloads);
+
         let root = self.latest_justified.root;
-        let new_safe_target =
-            self.get_fork_choice_head(root, &self.latest_new_attestations, min_score);
+        let new_safe_target = self.get_fork_choice_head(root, &attestations, min_score);
         self.safe_target = new_safe_target;
 
         let blocks = &self.blocks;
@@ -678,25 +629,140 @@ impl Store {
     }
 
     fn accept_new_attestations(&mut self) {
-        // Drain latest_new_attestations into latest_known_attestations
-        let new_attestations: Vec<_> = self.latest_new_attestations.drain().collect();
-        for (k, v) in new_attestations {
-            self.latest_known_attestations.insert(k, v);
+        // Merge latest_new_aggregated_payloads into latest_known_aggregated_payloads.
+        // For the same signature key, proof lists are concatenated.
+        let new_payloads: Vec<_> = self.latest_new_aggregated_payloads.drain().collect();
+        for (sig_key, proofs) in new_payloads {
+            self.latest_known_aggregated_payloads
+                .entry(sig_key)
+                .or_default()
+                .extend(proofs);
         }
         self.update_head();
     }
 
-    pub fn tick_interval(&mut self, has_proposal: bool) {
+    /// Aggregate gossip signatures into combined proofs and update the new aggregated payloads.
+    ///
+    /// Groups signatures by attestation data, creates an AggregatedSignatureProof per group,
+    /// updates latest_new_aggregated_payloads, and returns the resulting aggregated attestations.
+    pub fn aggregate_committee_signatures(&mut self) -> Vec<SignedAggregatedAttestation> {
+        let head_state = match self.states.get(&self.head).cloned() {
+            Some(s) => s,
+            None => return vec![],
+        };
+
+        // Group validator IDs by attestation data root
+        let mut groups: HashMap<H256, (AttestationData, Vec<u64>)> = HashMap::new();
+        for sig_key in self.gossip_signatures.keys() {
+            let data_root = sig_key.data_root;
+            let Some(attestation_data) = self.attestation_data_by_root.get(&data_root) else {
+                continue;
+            };
+            groups
+                .entry(data_root)
+                .and_modify(|(_, ids)| ids.push(sig_key.validator_id))
+                .or_insert_with(|| (attestation_data.clone(), vec![sig_key.validator_id]));
+        }
+
+        let mut new_aggregates = vec![];
+        let mut to_remove = vec![];
+
+        for (data_root, (attestation_data, validator_ids)) in &groups {
+            let mut sigs = vec![];
+            let mut pks = vec![];
+            let mut valid_ids = vec![];
+
+            for &vid in validator_ids {
+                let sig_key = SignatureKey {
+                    validator_id: vid,
+                    data_root: *data_root,
+                };
+                let Some(sig) = self.gossip_signatures.get(&sig_key) else {
+                    continue;
+                };
+                let Ok(validator) = head_state.validators.get(vid as usize) else {
+                    continue;
+                };
+                sigs.push(sig.clone());
+                pks.push(validator.pubkey.clone());
+                valid_ids.push(vid);
+            }
+
+            if valid_ids.is_empty() {
+                continue;
+            }
+
+            let participants = AggregationBits::from_validator_indices(&valid_ids);
+            let Ok(proof) = AggregatedSignatureProof::aggregate(
+                participants,
+                pks,
+                sigs,
+                *data_root,
+                attestation_data.slot.0 as u32,
+            ) else {
+                continue;
+            };
+
+            for vid in &valid_ids {
+                let key = SignatureKey {
+                    validator_id: *vid,
+                    data_root: *data_root,
+                };
+                self.latest_new_aggregated_payloads
+                    .entry(key.clone())
+                    .or_default()
+                    .push(proof.clone());
+                to_remove.push(key);
+            }
+
+            new_aggregates.push(SignedAggregatedAttestation {
+                data: attestation_data.clone(),
+                proof,
+            });
+        }
+
+        for key in to_remove {
+            self.gossip_signatures.remove(&key);
+        }
+
+        new_aggregates
+    }
+
+    pub fn tick_interval(
+        &mut self,
+        has_proposal: bool,
+        is_aggregator: bool,
+    ) -> Vec<SignedAggregatedAttestation> {
         self.time += 1;
-        // Calculate current interval within slot: time % INTERVALS_PER_SLOT
         let curr_interval = self.time % INTERVALS_PER_SLOT;
+        let mut new_aggregates = vec![];
 
         match curr_interval {
             0 if has_proposal => self.accept_new_attestations(),
-            2 => self.update_safe_target(),
-            3 => self.accept_new_attestations(),
+            2 if is_aggregator => new_aggregates = self.aggregate_committee_signatures(),
+            3 => self.update_safe_target(),
+            4 => self.accept_new_attestations(),
             _ => {}
         }
+
+        new_aggregates
+    }
+
+    pub fn on_tick(
+        &mut self,
+        target_interval: u64,
+        has_proposal: bool,
+        is_aggregator: bool,
+    ) -> Vec<SignedAggregatedAttestation> {
+        let mut all_new_aggregates = vec![];
+
+        while self.time < target_interval {
+            let should_signal_proposal = has_proposal && (self.time + 1) == target_interval;
+            let new_aggregates = self.tick_interval(should_signal_proposal, is_aggregator);
+            all_new_aggregates.extend(new_aggregates);
+        }
+
+        all_new_aggregates
     }
 
     /// Algorithm:
@@ -705,12 +771,12 @@ impl Store {
     ///    if safe target is newer
     /// 3. Ensure Justifiable: Continue walking back until slot is justifiable
     /// 4. Return Checkpoint: Create checkpoint from selected block
-    pub fn get_vote_target(&self) -> Checkpoint {
+    pub fn get_attestation_target(&self) -> Checkpoint {
         let mut target = self.head;
         let safe_slot = self.blocks[&self.safe_target].slot;
 
         // Walk back toward safe target
-        for _ in 0..3 {
+        for _ in 0..JUSTIFICATION_LOOKBACK_SLOTS {
             if self.blocks[&target].slot > safe_slot {
                 target = self.blocks[&target].parent_root;
             } else {
@@ -730,41 +796,51 @@ impl Store {
         }
     }
 
+    /// Produce attestation data for the current slot.
+    ///
+    /// Returns AttestationData with:
+    /// - slot: provided slot
+    /// - head: current forkchoice head
+    /// - target: checkpoint from get_attestation_target
+    /// - source: current justified checkpoint
+    pub fn produce_attestation_data(&self, slot: Slot) -> Result<AttestationData> {
+        let head_root = self.head;
+
+        let head_checkpoint = Checkpoint {
+            root: head_root,
+            slot: self
+                .get_block(&head_root)
+                .ok_or_else(|| anyhow!("Head block not found: {}", head_root))?
+                .slot,
+        };
+
+        let target_checkpoint = self.get_attestation_target();
+
+        Ok(AttestationData {
+            slot,
+            head: head_checkpoint,
+            target: target_checkpoint,
+            source: self.latest_justified.clone(),
+        })
+    }
+
     #[inline]
     pub fn get_proposal_head(&mut self, slot: Slot) -> H256 {
-        let slot_time = self.config.genesis_time + (slot.0 * SECONDS_PER_SLOT);
-
-        self.on_tick(slot_time, true);
+        // Advance time to this slot's first interval
+        let target_interval = slot.0 * INTERVALS_PER_SLOT;
+        self.on_tick(target_interval, true, false);
         self.accept_new_attestations();
         self.head
     }
 
-    #[inline]
-    pub fn on_tick(&mut self, time: u64, has_proposal: bool) {
-        // Calculate target time in intervals
-        let tick_interval_time =
-            time.saturating_sub(self.config.genesis_time) / SECONDS_PER_INTERVAL;
-
-        // Tick forward one interval at a time
-        while self.time < tick_interval_time {
-            // Check if proposal should be signaled for next interval
-            let should_signal_proposal = has_proposal && (self.time + 1) == tick_interval_time;
-
-            // Advance by one interval with appropriate signaling
-            self.tick_interval(should_signal_proposal);
-        }
-    }
-
-    /// Produce a block and aggregated signature proofs for the target slot per devnet-2.
-    ///
-    /// The proposer returns the block and `MultisigAggregatedSignature` proofs aligned
-    /// with `block.body.attestations` so it can craft `SignedBlockWithAttestation`.
+    /// Produce a block and aggregated signature proofs for the target slot.
     ///
     /// # Algorithm Overview
     /// 1. **Get Proposal Head**: Retrieve current chain head as parent
-    /// 2. **Collect Attestations**: Convert known attestations to plain attestations
-    /// 3. **Build Block**: Use State.build_block with signature caches
-    /// 4. **Store Block**: Insert block and post-state into Store
+    /// 2. **Verify Proposer**: Check validator is authorized for this slot
+    /// 3. **Collect Attestations**: Extract from known aggregated payloads
+    /// 4. **Build Block**: Use State.build_block with signature caches
+    /// 5. **Store Block**: Insert block and post-state into Store
     ///
     /// # Arguments
     /// * `slot` - Target slot number for block production
@@ -796,14 +872,15 @@ impl Store {
             expected_proposer
         );
 
-        // Convert AttestationData to Attestation objects for build_block
-        // Per devnet-2, store now holds AttestationData directly
-        let available_attestations: Vec<Attestation> = self
-            .latest_known_attestations
-            .iter()
+        // Extract attestations from known aggregated payloads
+        let known_payloads = self.latest_known_aggregated_payloads.clone();
+        let attestation_data_map =
+            self.extract_attestations_from_aggregated_payloads(&known_payloads);
+        let available_attestations: Vec<Attestation> = attestation_data_map
+            .into_iter()
             .map(|(validator_idx, attestation_data)| Attestation {
-                validator_id: *validator_idx,
-                data: attestation_data.clone(),
+                validator_id: validator_idx,
+                data: attestation_data,
             })
             .collect();
 
@@ -817,105 +894,67 @@ impl Store {
                 slot,
                 validator_index,
                 head_root,
-                None, // initial_attestations - start with empty, let fixed-point collect
+                None,
                 Some(available_attestations),
                 Some(&known_block_roots),
                 Some(&self.gossip_signatures),
-                Some(&self.aggregated_payloads),
+                Some(&self.latest_known_aggregated_payloads),
             )?;
 
-        // Compute block root using the header hash (canonical block root)
+        // Compute block root
         let block_root = final_block.hash_tree_root();
 
-        // Store block and state (per devnet-2, we store the plain Block)
+        // Update checkpoints from post-state
+        let prev_finalized_slot = self.latest_finalized.slot;
+        if final_post_state.latest_justified.slot > self.latest_justified.slot {
+            self.latest_justified = final_post_state.latest_justified.clone();
+        }
+        if final_post_state.latest_finalized.slot > self.latest_finalized.slot {
+            self.latest_finalized = final_post_state.latest_finalized.clone();
+        }
+
+        // Store block and state
         self.blocks.insert(block_root, final_block.clone());
         self.states.insert(block_root, final_post_state);
+
+        // Prune stale attestation data when finalization advances
+        if self.latest_finalized.slot > prev_finalized_slot {
+            self.prune_stale_attestation_data();
+        }
 
         Ok((block_root, final_block, signatures))
     }
 
-    // ========== Block and Attestation Processing ==========
-
-    /// Process a block and add it to the fork choice store.
-    ///
-    /// Algorithm:
-    /// 1. Skip duplicate blocks (idempotent operation)
-    /// 2. Check if parent exists; queue block if not
-    /// 3. Compute post-state via state transition
-    /// 4. Update justified/finalized checkpoints if needed
-    /// 5. Process queued children blocks
     // ========== Block Processing ==========
-
-    /// Extract attestations from aggregated payloads.
-    ///
-    /// Given a mapping of aggregated signature proofs, extract the attestation data
-    /// for each validator that participated.
-    ///
-    /// Returns a mapping from ValidatorIndex to AttestationData.
-    fn extract_attestations_from_aggregated_payloads(
-        &self,
-        aggregated_payloads: &HashMap<SignatureKey, Vec<AggregatedSignatureProof>>,
-    ) -> HashMap<u64, AttestationData> {
-        let mut attestations: HashMap<u64, AttestationData> = HashMap::new();
-
-        for (sig_key, proofs) in aggregated_payloads {
-            // Get attestation data from the data root
-            let data_root = sig_key.data_root;
-            let Some(attestation_data) = self.attestation_data_by_root.get(&data_root) else {
-                continue; // Skip if we don't have the attestation data
-            };
-
-            // Extract validator IDs from all proofs
-            for proof in proofs {
-                let validator_ids = proof.get_participant_indices();
-                for vid in validator_ids {
-                    // Store attestation data for this validator
-                    // If multiple attestations exist for same validator, keep the latest
-                    attestations
-                        .entry(vid)
-                        .and_modify(|existing| {
-                            if attestation_data.slot > existing.slot {
-                                *existing = attestation_data.clone();
-                            }
-                        })
-                        .or_insert_with(|| attestation_data.clone());
-                }
-            }
-        }
-
-        attestations
-    }
 
     pub fn on_block(&mut self, signed_block: SignedBlockWithAttestation) -> Result<()> {
         let block = signed_block.message.block.clone();
         let block_root = block.hash_tree_root();
 
-        // Skip duplicate blocks
+        // Skip duplicate blocks (idempotent operation)
         if self.blocks.contains_key(&block_root) {
             return Ok(());
         }
 
-        // Check if parent exists
+        // Verify parent chain is available.
+        // If missing, the node must sync the parent chain first.
         let parent_root = block.parent_root;
-        if !self.blocks.contains_key(&parent_root) && !parent_root.is_zero() {
-            // Queue block for later processing
-            self.blocks_queue
-                .entry(parent_root)
-                .or_default()
-                .push(signed_block);
-            return Err(anyhow!("Block queued: parent not found"));
-        }
-
-        // Get parent state
         let parent_state = self
             .states
             .get(&parent_root)
-            .ok_or_else(|| anyhow!("Parent state not found"))?
+            .ok_or_else(|| {
+                anyhow!(
+                    "Parent state not found (root={}). Sync parent chain before processing block at slot {}.",
+                    parent_root,
+                    block.slot.0
+                )
+            })?
             .clone();
 
-        // Compute post-state via state transition
-        // valid_signatures = true (assume signatures are already verified)
-        let post_state = parent_state.state_transition(signed_block, true)?;
+        // Compute post-state via state transition function
+        let post_state = parent_state.state_transition(signed_block.clone(), true)?;
+
+        let prev_finalized_slot = self.latest_finalized.slot;
 
         // Update justified checkpoint if post-state has higher slot
         if post_state.latest_justified.slot > self.latest_justified.slot {
@@ -928,44 +967,74 @@ impl Store {
         }
 
         // Store block and state
-        self.blocks.insert(block_root, block);
+        self.blocks.insert(block_root, block.clone());
         self.states.insert(block_root, post_state);
 
-        // Update head
-        self.update_head();
+        // Process block body attestations and store their proofs in known payloads
+        let aggregated_attestations = &block.body.attestations;
+        let attestation_signatures = &signed_block.signature.attestation_signatures;
 
-        // Process queued children
-        if let Some(queued) = self.blocks_queue.remove(&block_root) {
-            for child_block in queued {
-                // Ignore errors from queued blocks
-                let _ = self.on_block(child_block);
+        ensure!(
+            aggregated_attestations.len_u64() == attestation_signatures.len_u64(),
+            "Attestation signature groups must match aggregated attestations"
+        );
+
+        for (att, proof) in aggregated_attestations
+            .into_iter()
+            .zip(attestation_signatures.into_iter())
+        {
+            let validator_ids = att.aggregation_bits.to_validator_indices();
+            let data_root = att.data.hash_tree_root();
+
+            // Store attestation data for later extraction
+            self.attestation_data_by_root
+                .insert(data_root, att.data.clone());
+
+            for vid in &validator_ids {
+                // Store proof in known payloads (block attestations are immediately known)
+                let key = SignatureKey {
+                    validator_id: *vid,
+                    data_root,
+                };
+                self.latest_known_aggregated_payloads
+                    .entry(key)
+                    .or_default()
+                    .push(proof.clone());
             }
         }
 
-        Ok(())
-    }
+        // Store proposer attestation data
+        let proposer_attestation = &signed_block.message.proposer_attestation;
+        let proposer_data_root = proposer_attestation.data.hash_tree_root();
+        self.attestation_data_by_root
+            .insert(proposer_data_root, proposer_attestation.data.clone());
 
-    /// Process an attestation and add it to the fork choice store.
-    ///
-    /// If `is_proposer` is true, the attestation goes directly to known attestations.
-    /// Otherwise, it goes to new attestations (pending until interval 3).
-    pub fn on_attestation(
-        &mut self,
-        attestation: SignedAttestation,
-        is_proposer: bool,
-    ) -> Result<()> {
-        let validator_id = attestation.validator_id;
-        let data = attestation.message;
+        // Update forkchoice head based on new block and attestations.
+        // IMPORTANT: This must happen BEFORE processing proposer attestation
+        // to prevent the proposer from gaining circular weight advantage.
+        self.update_head();
 
-        // Validate that the attestation's head block exists
-        if !self.blocks.contains_key(&data.head.root) {
-            return Err(anyhow!("Attestation head block not found"));
+        // Store proposer signature if it belongs to the same committee subnet
+        if let Some(my_id) = self.validator_id {
+            let proposer_subnet =
+                proposer_attestation.validator_id % ATTESTATION_COMMITTEE_COUNT;
+            let current_subnet = my_id % ATTESTATION_COMMITTEE_COUNT;
+
+            if proposer_subnet == current_subnet {
+                let proposer_sig_key = SignatureKey {
+                    validator_id: proposer_attestation.validator_id,
+                    data_root: proposer_data_root,
+                };
+                self.gossip_signatures.insert(
+                    proposer_sig_key,
+                    signed_block.signature.proposer_signature.clone(),
+                );
+            }
         }
 
-        if is_proposer {
-            self.latest_known_attestations.insert(validator_id, data);
-        } else {
-            self.latest_new_attestations.insert(validator_id, data);
+        // Prune stale attestation data when finalization advances
+        if self.latest_finalized.slot > prev_finalized_slot {
+            self.prune_stale_attestation_data();
         }
 
         Ok(())
@@ -1006,29 +1075,20 @@ impl Store {
         self.states.insert(root, state);
     }
 
-    pub fn insert_latest_known_attestation(&mut self, validator_id: u64, data: AttestationData) {
-        self.latest_known_attestations.insert(validator_id, data);
-    }
-
-    /// Alias for insert_latest_known_attestation (used by tests)
-    pub fn insert_known_attestation(&mut self, validator_id: u64, data: AttestationData) {
-        self.latest_known_attestations.insert(validator_id, data);
-    }
-
-    pub fn insert_latest_new_attestation(&mut self, validator_id: u64, data: AttestationData) {
-        self.latest_new_attestations.insert(validator_id, data);
-    }
-
     pub fn clear_known_attestations(&mut self) {
-        self.latest_known_attestations.clear();
+        self.latest_known_aggregated_payloads.clear();
     }
 
     pub fn insert_gossip_signature(&mut self, key: SignatureKey, sig: Signature) {
         self.gossip_signatures.insert(key, sig);
     }
 
-    pub fn insert_aggregated_payload(&mut self, key: SignatureKey, proofs: Vec<AggregatedSignatureProof>) {
-        self.aggregated_payloads.insert(key, proofs);
+    pub fn insert_aggregated_payload(
+        &mut self,
+        key: SignatureKey,
+        proofs: Vec<AggregatedSignatureProof>,
+    ) {
+        self.latest_known_aggregated_payloads.insert(key, proofs);
     }
 
     pub fn set_latest_justified(&mut self, checkpoint: Checkpoint) {
@@ -1051,10 +1111,9 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use containers::{BlockBody, BlockWithAttestation, Validator};
+    use containers::{BlockBody, Validator};
 
     fn create_test_store() -> Store {
-        let config = Config { genesis_time: 1000 };
         let validators = vec![Validator::default(); 10];
         let state = State::generate_genesis_with_validators(1000, validators);
 
@@ -1066,17 +1125,7 @@ mod tests {
             body: BlockBody::default(),
         };
 
-        let block_with_attestation = BlockWithAttestation {
-            block,
-            proposer_attestation: Attestation::default(),
-        };
-
-        let signed_block = SignedBlockWithAttestation {
-            message: block_with_attestation,
-            signature: Default::default(),
-        };
-
-        Store::new(state, signed_block, config)
+        Store::new(state, block, None)
     }
 
     fn create_attestation_data(
@@ -1096,27 +1145,13 @@ mod tests {
         }
     }
 
-    fn produce_attestation_data(store: &Store, slot: Slot) -> AttestationData {
-        let head_block = store.blocks().get(&store.head()).unwrap();
-        let head_checkpoint = Checkpoint {
-            root: store.head(),
-            slot: head_block.slot,
-        };
-        AttestationData {
-            slot,
-            head: head_checkpoint,
-            target: store.get_vote_target(),
-            source: store.latest_justified().clone(),
-        }
-    }
-
     // Time tests
     #[test]
     fn test_on_tick_basic() {
         let mut store = create_test_store();
         let initial_time = store.time();
-        let target_time = store.config().genesis_time + 200;
-        store.on_tick(target_time, true);
+        let target_interval = 200u64;
+        store.on_tick(target_interval, true, false);
         assert!(store.time() > initial_time);
     }
 
@@ -1124,8 +1159,7 @@ mod tests {
     fn test_on_tick_already_current() {
         let mut store = create_test_store();
         let initial_time = store.time();
-        let current_target = store.config().genesis_time + initial_time;
-        store.on_tick(current_target, true);
+        store.on_tick(initial_time, true, false);
         assert_eq!(store.time(), initial_time);
     }
 
@@ -1133,7 +1167,7 @@ mod tests {
     fn test_tick_interval_basic() {
         let mut store = create_test_store();
         let initial_time = store.time();
-        store.tick_interval(false);
+        store.tick_interval(false, false);
         assert_eq!(store.time(), initial_time + 1);
     }
 
@@ -1142,7 +1176,7 @@ mod tests {
         let mut store = create_test_store();
         let initial_time = store.time();
         for i in 0..5 {
-            store.tick_interval(i % 2 == 0);
+            store.tick_interval(i % 2 == 0, false);
         }
         assert_eq!(store.time(), initial_time + 5);
     }
@@ -1153,7 +1187,7 @@ mod tests {
         store.set_time(0);
         for interval in 0..INTERVALS_PER_SLOT {
             let has_proposal = interval == 0;
-            store.tick_interval(has_proposal);
+            store.tick_interval(has_proposal, false);
             let current_interval = store.time() % INTERVALS_PER_SLOT;
             let expected_interval = (interval + 1) % INTERVALS_PER_SLOT;
             assert_eq!(current_interval, expected_interval);
@@ -1180,7 +1214,7 @@ mod tests {
         }
 
         store.set_head(parent_root);
-        let target = store.get_vote_target();
+        let target = store.get_attestation_target();
         assert_eq!(target.slot, Slot(6));
     }
 
@@ -1322,27 +1356,6 @@ mod tests {
     }
 
     #[test]
-    fn test_block_production_then_attestation() {
-        let mut store = create_test_store();
-
-        let _ = store
-            .produce_block_with_signatures(Slot(1), 1)
-            .expect("block should succeed");
-
-        store.update_head();
-
-        let attestation_data = produce_attestation_data(&store, Slot(2));
-        let attestation = Attestation {
-            validator_id: 7,
-            data: attestation_data,
-        };
-
-        assert_eq!(attestation.validator_id, 7);
-        assert_eq!(attestation.data.slot, Slot(2));
-        assert_eq!(attestation.data.source, *store.latest_justified());
-    }
-
-    #[test]
     fn test_produce_block_missing_parent_state() {
         let validators = vec![Validator::default(); 3];
         let state = State::generate_genesis_with_validators(1000, validators);
@@ -1353,16 +1366,8 @@ mod tests {
             state_root: state.hash_tree_root(),
             body: BlockBody::default(),
         };
-        let block_with_attestation = BlockWithAttestation {
-            block: genesis,
-            proposer_attestation: Attestation::default(),
-        };
-        let signed_block = SignedBlockWithAttestation {
-            message: block_with_attestation,
-            signature: Default::default(),
-        };
 
-        let mut store = Store::new(state, signed_block, Config { genesis_time: 1000 });
+        let mut store = Store::new(state, genesis, None);
         store.states_mut().clear();
 
         let result = store.produce_block_with_signatures(Slot(1), 1);

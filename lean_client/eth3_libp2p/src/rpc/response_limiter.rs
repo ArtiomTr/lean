@@ -3,48 +3,42 @@ use crate::rpc::config::InboundRateLimiterConfig;
 use crate::rpc::rate_limiter::{RPCRateLimiter, RateLimitedErr};
 use crate::rpc::self_limiter::timestamp_now;
 use crate::rpc::{Protocol, RpcResponse, SubstreamId};
-use crate::types::ForkContext;
 use futures::FutureExt;
 use libp2p::swarm::ConnectionId;
 use logging::exception;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio_util::time::DelayQueue;
 use tracing::debug;
-use types::preset::Preset;
 
 /// A response that was rate limited or waiting on rate limited responses for the same peer and
 /// protocol.
 #[derive(Clone)]
-pub(super) struct QueuedResponse<P: Preset> {
+pub(super) struct QueuedResponse {
     pub peer_id: PeerId,
     pub connection_id: ConnectionId,
     pub substream_id: SubstreamId,
-    pub response: RpcResponse<P>,
+    pub response: RpcResponse,
     pub protocol: Protocol,
     pub queued_at: Duration,
 }
 
-pub(super) struct ResponseLimiter<P: Preset> {
+pub(super) struct ResponseLimiter {
     /// Rate limiter for our responses.
     limiter: RPCRateLimiter,
     /// Responses queued for sending. These responses are stored when the response limiter rejects them.
-    delayed_responses: HashMap<(PeerId, Protocol), VecDeque<QueuedResponse<P>>>,
+    delayed_responses: HashMap<(PeerId, Protocol), VecDeque<QueuedResponse>>,
     /// The delay required to allow a peer's outbound response per protocol.
     next_response: DelayQueue<(PeerId, Protocol)>,
 }
 
-impl<P: Preset> ResponseLimiter<P> {
+impl ResponseLimiter {
     /// Creates a new [`ResponseLimiter`] based on configuration values.
-    pub fn new(
-        config: InboundRateLimiterConfig,
-        fork_context: Arc<ForkContext>,
-    ) -> Result<Self, &'static str> {
+    pub fn new(config: InboundRateLimiterConfig) -> Result<Self, &'static str> {
         Ok(ResponseLimiter {
-            limiter: RPCRateLimiter::new_with_config(config.0, fork_context)?,
+            limiter: RPCRateLimiter::new_with_config(config.0)?,
             delayed_responses: HashMap::new(),
             next_response: DelayQueue::new(),
         })
@@ -58,7 +52,7 @@ impl<P: Preset> ResponseLimiter<P> {
         protocol: Protocol,
         connection_id: ConnectionId,
         substream_id: SubstreamId,
-        response: RpcResponse<P>,
+        response: RpcResponse,
     ) -> bool {
         // First check that there are not already other responses waiting to be sent.
         if let Some(queue) = self.delayed_responses.get_mut(&(peer_id, protocol)) {
@@ -100,7 +94,7 @@ impl<P: Preset> ResponseLimiter<P> {
     fn try_limiter(
         limiter: &mut RPCRateLimiter,
         peer_id: PeerId,
-        response: RpcResponse<P>,
+        response: RpcResponse,
         protocol: Protocol,
     ) -> Result<(), Duration> {
         match limiter.allows(&peer_id, &(response.clone(), protocol)) {
@@ -131,7 +125,7 @@ impl<P: Preset> ResponseLimiter<P> {
 
     /// When a peer and protocol are allowed to send a next response, this function checks the
     /// queued responses and attempts marking as ready as many as the limiter allows.
-    pub fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Vec<QueuedResponse<P>>> {
+    pub fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Vec<QueuedResponse>> {
         let mut responses = vec![];
         while let Poll::Ready(Some(expired)) = self.next_response.poll_expired(cx) {
             let (peer_id, protocol) = expired.into_inner();

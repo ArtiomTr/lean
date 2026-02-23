@@ -221,16 +221,11 @@ impl AggregatedAttestation {
     }
 }
 
-/// Aggregated attestation bundled with aggregated signatures.
+/// Signed aggregated attestation with aggregated proof.
 #[derive(Clone, Debug, Ssz)]
 pub struct SignedAggregatedAttestation {
-    /// Aggregated attestation data.
-    pub message: AggregatedAttestation,
-    /// Aggregated attestation plus its combined signature.
-    ///
-    /// Stores a naive list of validator signatures that mirrors the attestation
-    /// order.
-    ///
-    /// TODO: this will be replaced by a SNARK in future devnets.
-    pub signature: AggregatedSignatures,
+    /// The attestation data that was signed.
+    pub data: AttestationData,
+    /// Aggregated signature proof covering all participating validators.
+    pub proof: AggregatedSignatureProof,
 }

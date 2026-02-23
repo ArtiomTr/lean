@@ -2,13 +2,12 @@
 use std::fmt::Display;
 
 use crate::types::{EnrAttestationBitfield, EnrSyncCommitteeBitfield};
-use containers::{SignedBlock, Slot, Status};
+use containers::{SignedBlockWithAttestation, Slot, Status};
 use regex::bytes::Regex;
 use serde::Serialize;
 use ssz::{
     ContiguousList, DynamicList, ReadError, Size, Ssz, SszRead, SszSize, SszWrite, WriteError, H256,
 };
-use std::marker::PhantomData;
 use std::{ops::Deref, sync::Arc};
 use strum::IntoStaticStr;
 use try_from_iterator::TryFromIterator as _;
@@ -295,7 +294,7 @@ pub enum RpcSuccessResponse {
     Status(StatusMessage),
 
     /// A response to a get BLOCKS_BY_ROOT request.
-    BlocksByRoot(Arc<SignedBlock>),
+    BlocksByRoot(Arc<SignedBlockWithAttestation>),
 
     /// A PONG response to a PING request.
     Pong(Ping),
@@ -405,7 +404,7 @@ impl RpcSuccessResponse {
 
     pub fn slot(&self) -> Option<Slot> {
         match self {
-            RpcSuccessResponse::BlocksByRoot(block) => Some(block.block.header.slot),
+            RpcSuccessResponse::BlocksByRoot(block) => Some(block.message.block.slot),
             RpcSuccessResponse::MetaData(_)
             | RpcSuccessResponse::Status(_)
             | RpcSuccessResponse::Pong(_) => None,
@@ -443,7 +442,7 @@ impl std::fmt::Display for RpcSuccessResponse {
         match self {
             RpcSuccessResponse::Status(status) => write!(f, "{}", status),
             RpcSuccessResponse::BlocksByRoot(block) => {
-                write!(f, "BlocksByRoot: Block slot: {}", block.block.header.slot)
+                write!(f, "BlocksByRoot: Block slot: {}", block.message.block.slot)
             }
             RpcSuccessResponse::Pong(ping) => write!(f, "Pong: {}", ping.data),
             RpcSuccessResponse::MetaData(metadata) => {

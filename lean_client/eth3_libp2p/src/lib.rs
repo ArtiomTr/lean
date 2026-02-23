@@ -129,5 +129,7 @@ pub use peer_manager::{
 };
 // pub use service::{load_private_key, Context, Libp2pEvent, Service, NETWORK_KEY_FILENAME};
 pub use service::api_types::Response;
+pub use service::network_service::{NetworkService, NetworkServiceConfig};
 pub use service::utils::*;
 pub use service::{Gossipsub, NetworkEvent};
+pub use types::{ChainMessage, OutboundP2pRequest};

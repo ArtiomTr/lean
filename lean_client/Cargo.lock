@@ -4061,6 +4061,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "networking"
+version = "0.0.0"
+dependencies = [
+ "libp2p",
+]
+
+[[package]]
 name = "nix"
 version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

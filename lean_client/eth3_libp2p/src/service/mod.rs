@@ -44,30 +44,30 @@ use std::time::Duration;
 use std::usize;
 use std_ext::ArcExt as _;
 use tracing::{debug, error, info, trace, warn};
-use typenum::Unsigned as _;
 
 use types::{
-    altair::consts::SyncCommitteeSubnetCount,
     config::Config as ChainConfig,
     nonstandard::Phase,
     phase0::{
         consts::AttestationSubnetCount,
         primitives::{ForkDigest, Slot},
     },
-    preset::Preset,
 };
 use utils::{Context as ServiceContext, build_transport, strip_peer_id};
 
 pub mod api_types;
 mod gossip_cache;
 pub mod gossipsub_scoring_parameters;
+pub mod network_service;
 pub mod utils;
+
+pub use network_service::{NetworkService, NetworkServiceConfig};
 
 const MAX_IDENTIFY_ADDRESSES: usize = 10;
 
 /// The types of events than can be obtained from polling the behaviour.
 #[derive(Debug)]
-pub enum NetworkEvent<P: Preset> {
+pub enum NetworkEvent {
     /// We have successfully dialed and connected to a peer.
     PeerConnectedOutgoing(PeerId),
     /// A peer has successfully dialed and connected to us.
@@ -89,7 +89,7 @@ pub enum NetworkEvent<P: Preset> {
         /// Identifier of the request. All responses to this request must use this id.
         inbound_request_id: InboundRequestId,
         /// Request the peer sent.
-        request_type: RequestType<P>,
+        request_type: RequestType,
     },
     ResponseReceived {
         /// Peer that sent the response.
@@ -97,7 +97,7 @@ pub enum NetworkEvent<P: Preset> {
         /// Id of the request to which the peer is responding.
         app_request_id: AppRequestId,
         /// Response the peer sent.
-        response: Response<P>,
+        response: Response,
     },
     PubsubMessage {
         /// The gossipsub message id. Used when propagating blocks after validation.
@@ -107,14 +107,12 @@ pub enum NetworkEvent<P: Preset> {
         /// The topic that this message was sent on.
         topic: TopicHash,
         /// The message itself.
-        message: PubsubMessage<P>,
+        message: PubsubMessage,
     },
     /// Inform the network to send a Status to this peer.
     StatusPeer(PeerId),
     NewListenAddr(Multiaddr),
     ZeroListeners,
-    /// A peer has an updated custody group count from MetaData.
-    PeerUpdatedCustodyGroupCount(PeerId),
 }
 
 pub type Gossipsub = gossipsub::Behaviour<SnappyTransform, SubscriptionFilter>;
@@ -122,10 +120,7 @@ pub type SubscriptionFilter =
     gossipsub::MaxCountSubscriptionFilter<gossipsub::WhitelistSubscriptionFilter>;
 
 #[derive(NetworkBehaviour)]
-pub(crate) struct Behaviour<P>
-where
-    P: Preset,
-{
+pub(crate) struct Behaviour {
     // NOTE: The order of the following list of behaviours has meaning,
     // `NetworkBehaviour::handle_{pending, established}_{inbound, outbound}` methods
     // are called sequentially for each behaviour and they are fallible,
@@ -139,9 +134,9 @@ where
     /// The peer manager that keeps track of peer's reputation and status.
     pub peer_manager: PeerManager,
     /// The Eth2 RPC specified in the wire-0 protocol.
-    pub eth2_rpc: RPC<AppRequestId, P>,
+    pub eth2_rpc: RPC<AppRequestId>,
     /// Discv5 Discovery protocol.
-    pub discovery: Discovery<P>,
+    pub discovery: Discovery,
     /// Keep regular connection to peers and disconnect if absent.
     // NOTE: The id protocol is used for initial interop. This will be removed by mainnet.
     /// Provides IP addresses and peer information.
@@ -155,8 +150,8 @@ where
 /// Builds the network behaviour that manages the core protocols of eth2.
 /// This core behaviour is managed by `Behaviour` which adds peer management to all core
 /// behaviours.
-pub struct Network<P: Preset> {
-    swarm: libp2p::swarm::Swarm<Behaviour<P>>,
+pub struct Network {
+    swarm: libp2p::swarm::Swarm<Behaviour>,
     /* Auxiliary Fields */
     /// A collections of variables accessible outside the network service.
     network_globals: Arc<NetworkGlobals>,
@@ -168,7 +163,7 @@ pub struct Network<P: Preset> {
     network_dir: Option<PathBuf>,
     fork_context: Arc<ForkContext>,
     /// Gossipsub score parameters.
-    score_settings: PeerScoreSettings<P>,
+    score_settings: PeerScoreSettings,
     /// The interval for updating gossipsub scores
     update_gossipsub_scores: tokio::time::Interval,
     gossip_cache: GossipCache,
@@ -177,12 +172,11 @@ pub struct Network<P: Preset> {
 }
 
 /// Implements the combined behaviour for the libp2p service.
-impl<P: Preset> Network<P> {
+impl Network {
     pub async fn new(
         chain_config: Arc<ChainConfig>,
         executor: task_executor::TaskExecutor,
         mut ctx: ServiceContext,
-        custody_group_count: u64,
         local_keypair: Keypair,
     ) -> Result<(Self, Arc<NetworkGlobals>)> {
         let config = ctx.config.clone();
@@ -203,23 +197,20 @@ impl<P: Preset> Network<P> {
             .next_fork_digest()
             .unwrap_or_else(|| ctx.fork_context.current_fork_digest());
 
-        let custody_group_count_opt = chain_config
-            .is_peerdas_scheduled()
-            .then_some(custody_group_count);
-        let enr = crate::discovery::enr::build_or_load_enr::<P>(
+        let enr = crate::discovery::enr::build_or_load_enr(
             &chain_config,
             local_keypair.clone(),
             &config,
             &ctx.enr_fork_id,
-            custody_group_count_opt,
+            None,
             next_fork_digest,
         )?;
 
         // Construct the metadata
         let meta_data =
-            utils::load_or_build_metadata(config.network_dir.as_deref(), custody_group_count_opt);
+            utils::load_or_build_metadata(config.network_dir.as_deref());
         let seq_number = meta_data.seq_number();
-        let globals = NetworkGlobals::new::<P>(
+        let globals = NetworkGlobals::new(
             chain_config.clone_arc(),
             enr,
             meta_data,
@@ -259,7 +250,7 @@ impl<P: Preset> Network<P> {
         let gossip_cache = {
             let slot_duration = chain_config.slot_duration_ms;
             let half_epoch = std::time::Duration::from_secs(
-                chain_config.slot_duration_ms.as_secs() * P::SlotsPerEpoch::U64 / 2,
+                chain_config.slot_duration_ms.as_secs() * 32_u64 / 2,
             );
 
             GossipCache::builder()
@@ -285,13 +276,12 @@ impl<P: Preset> Network<P> {
             let params = {
                 // Construct a set of gossipsub peer scoring parameters
                 // We don't know the number of active validators and the current slot yet
-                let active_validators = P::SlotsPerEpoch::U64;
+                let active_validators = 32_u64;
                 let current_slot = 0;
 
                 score_settings.get_peer_score_params(
                     active_validators,
                     &thresholds,
-                    &enr_fork_id,
                     current_slot,
                 )
             };
@@ -301,56 +291,29 @@ impl<P: Preset> Network<P> {
             // Set up a scoring update interval
             let update_gossipsub_scores = tokio::time::interval(params.decay_interval);
 
-            let current_fork_epoch = ctx.fork_context.current_fork_epoch();
-            let current_and_future_forks = ctx
-                .fork_context
-                .all_fork_epochs()
+            // In lean client there's only one fork. Use enr_fork_id.fork_digest.
+            let fork_digest = enr_fork_id.fork_digest;
+            let all_topics: Vec<TopicHash> = all_topics_at_fork(&chain_config, Phase::Phase0)
                 .into_iter()
-                .filter_map(|fork_epoch| {
-                    if fork_epoch >= current_fork_epoch {
-                        Some((fork_epoch, ctx.fork_context.context_bytes(fork_epoch)))
-                    } else {
-                        None
-                    }
-                });
-
-            let all_topics_for_forks = current_and_future_forks
-                .map(|(fork_epoch, fork_digest)| {
-                    let phase = ctx.chain_config.phase_at_epoch(fork_epoch);
-                    all_topics_at_fork(&chain_config, phase)
-                        .into_iter()
-                        .map(|topic| {
-                            Topic::new(GossipTopic::new(
-                                topic,
-                                GossipEncoding::default(),
-                                fork_digest,
-                            ))
-                            .into()
-                        })
-                        .collect::<Vec<TopicHash>>()
+                .map(|topic| {
+                    Topic::new(GossipTopic::new(
+                        topic,
+                        GossipEncoding::default(),
+                        fork_digest,
+                    ))
+                    .into()
                 })
-                .collect::<Vec<_>>();
-
-            // For simplicity find the fork with the most individual topics and assume all forks
-            // have the same topic count
-            let max_topics_at_any_fork = all_topics_for_forks
-                .iter()
-                .map(|topics| topics.len())
-                .max()
-                .expect("each fork has at least 5 hardcoded core topics");
-
-            let possible_fork_digests = ctx.fork_context.all_fork_digests();
+                .collect::<Vec<TopicHash>>();
+            let max_topics_at_any_fork = all_topics.len();
+            let possible_fork_digests = vec![fork_digest];
 
             let filter = gossipsub::MaxCountSubscriptionFilter {
                 filter: utils::create_whitelist_filter(
                     possible_fork_digests,
-                    &chain_config,
                     AttestationSubnetCount::U64,
-                    SyncCommitteeSubnetCount::U64,
                 ),
                 // during a fork we subscribe to both the old and new topics
                 max_subscribed_topics: max_topics_at_any_fork * 4,
-                // 424 in theory = (64 attestation + 4 sync committee + 7 core topics + 9 blob topics + 128 column topics) * 2
                 max_subscriptions_per_request: max_topics_at_any_fork * 2,
             };
 
@@ -390,7 +353,7 @@ impl<P: Preset> Network<P> {
 
         let discovery = {
             // Build and start the discovery sub-behaviour
-            let mut discovery = Discovery::<P>::new(
+            let mut discovery = Discovery::new(
                 chain_config,
                 local_keypair.clone(),
                 &config,
@@ -426,7 +389,7 @@ impl<P: Preset> Network<P> {
                 target_peer_count: config.target_peers,
                 ..Default::default()
             };
-            PeerManager::new::<P>(peer_manager_cfg, network_globals.clone())?
+            PeerManager::new(peer_manager_cfg, network_globals.clone())?
         };
 
         let connection_limits = {
@@ -655,11 +618,11 @@ impl<P: Preset> Network<P> {
         &mut self.swarm.behaviour_mut().gossipsub
     }
     /// The Eth2 RPC specified in the wire-0 protocol.
-    pub fn eth2_rpc_mut(&mut self) -> &mut RPC<AppRequestId, P> {
+    pub fn eth2_rpc_mut(&mut self) -> &mut RPC<AppRequestId> {
         &mut self.swarm.behaviour_mut().eth2_rpc
     }
     /// Discv5 Discovery protocol.
-    pub fn discovery_mut(&mut self) -> &mut Discovery<P> {
+    pub fn discovery_mut(&mut self) -> &mut Discovery {
         &mut self.swarm.behaviour_mut().discovery
     }
     /// Provides IP addresses and peer information.
@@ -676,11 +639,11 @@ impl<P: Preset> Network<P> {
         &self.swarm.behaviour().gossipsub
     }
     /// The Eth2 RPC specified in the wire-0 protocol.
-    pub fn eth2_rpc(&self) -> &RPC<AppRequestId, P> {
+    pub fn eth2_rpc(&self) -> &RPC<AppRequestId> {
         &self.swarm.behaviour().eth2_rpc
     }
     /// Discv5 Discovery protocol.
-    pub fn discovery(&self) -> &Discovery<P> {
+    pub fn discovery(&self) -> &Discovery {
         &self.swarm.behaviour().discovery
     }
     /// Provides IP addresses and peer information.
@@ -786,16 +749,6 @@ impl<P: Preset> Network<P> {
         }
     }
 
-    /// Subscribe to all data columns determined by the cgc.
-    pub fn subscribe_new_data_column_subnets(&mut self, sampling_column_count: u64) {
-        self.network_globals
-            .update_data_column_subnets::<P>(sampling_column_count);
-
-        for column in self.network_globals.sampling_subnets() {
-            let kind = GossipKind::DataColumnSidecar(column);
-            self.subscribe_kind(kind);
-        }
-    }
 
     /// Returns the scoring parameters for a topic if set.
     pub fn get_topic_params(&self, topic: GossipTopic) -> Option<&TopicScoreParams> {
@@ -845,7 +798,7 @@ impl<P: Preset> Network<P> {
     }
 
     /// Publishes message on the pubsub (gossipsub) behaviour, choosing the encoding.
-    pub fn publish(&mut self, message: PubsubMessage<P>) {
+    pub fn publish(&mut self, message: PubsubMessage) {
         for topic in message.topics(GossipEncoding::default(), self.enr_fork_id.fork_digest) {
             let message_data = match message.encode(GossipEncoding::default()) {
                 Ok(message) => message,
@@ -956,7 +909,7 @@ impl<P: Preset> Network<P> {
         &mut self,
         peer_id: PeerId,
         app_request_id: AppRequestId,
-        request: RequestType<P>,
+        request: RequestType,
     ) -> Result<(), (AppRequestId, RPCError)> {
         // Check if the peer is connected before sending an RPC request
         if !self.swarm.is_connected(&peer_id) {
@@ -969,7 +922,7 @@ impl<P: Preset> Network<P> {
     }
 
     /// Send a successful response to a peer over RPC.
-    pub fn send_response<T: Into<RpcResponse<P>>>(
+    pub fn send_response<T: Into<RpcResponse>>(
         &mut self,
         peer_id: PeerId,
         inbound_request_id: InboundRequestId,
@@ -1040,14 +993,6 @@ impl<P: Preset> Network<P> {
         self.update_metadata_bitfields();
     }
 
-    /// Updates the cgc value in the ENR.
-    pub fn update_enr_cgc(&mut self, new_custody_group_count: u64) {
-        if let Err(e) = self.discovery_mut().update_enr_cgc(new_custody_group_count) {
-            exception!(error = ?e, "Could not update cgc in ENR");
-        }
-        // update the local meta data which informs our peers of the update during PINGS
-        self.update_metadata_cgc(new_custody_group_count);
-    }
 
     /// Attempts to discover new peers for a given subnet. The `min_ttl` gives the time at which we
     /// would like to retain the peers for.
@@ -1057,7 +1002,6 @@ impl<P: Preset> Network<P> {
             return;
         }
 
-        let chain_config = self.fork_context.chain_config().clone();
         let filtered: Vec<SubnetDiscovery> = subnets_to_discover
             .into_iter()
             .filter(|s| {
@@ -1092,7 +1036,7 @@ impl<P: Preset> Network<P> {
                 // If we connect to the cached peers before the discovery query starts, then we potentially
                 // save a costly discovery query.
                 } else {
-                    self.dial_cached_enrs_in_subnet(chain_config.clone(), s.subnet);
+                    self.dial_cached_enrs_in_subnet(s.subnet);
                     true
                 }
             })
@@ -1152,23 +1096,6 @@ impl<P: Preset> Network<P> {
         utils::save_metadata_to_disk(self.network_dir.as_deref(), meta_data);
     }
 
-    /// Update the current custody group count in meta data of the node to match the local ENR.
-    fn update_metadata_cgc(&mut self, scheduled_custody_group_count: u64) {
-        // write lock scope
-        let mut meta_data_w = self.network_globals.local_metadata.write();
-
-        *meta_data_w.seq_number_mut() += 1;
-        if let Some(custody_group_count) = meta_data_w.custody_group_count_mut() {
-            *custody_group_count = scheduled_custody_group_count;
-        }
-        let seq_number = meta_data_w.seq_number();
-        let meta_data = meta_data_w.clone();
-
-        drop(meta_data_w);
-        self.eth2_rpc_mut().update_seq_number(seq_number);
-        // Save the updated metadata to disk
-        utils::save_metadata_to_disk(self.network_dir.as_deref(), meta_data);
-    }
 
     /// Sends a Ping request to the peer.
     fn ping(&mut self, peer_id: PeerId) {
@@ -1177,14 +1104,7 @@ impl<P: Preset> Network<P> {
 
     /// Sends a METADATA request to a peer.
     fn send_meta_data_request(&mut self, peer_id: PeerId) {
-        let event = if self.network_globals.config.is_peerdas_scheduled() {
-            // Nodes with higher custody will probably start advertising it
-            // before peerdas is activated
-            RequestType::MetaData(MetadataRequest::new_v3())
-        } else {
-            // We always prefer sending V2 requests otherwise
-            RequestType::MetaData(MetadataRequest::new_v2())
-        };
+        let event = RequestType::MetaData(MetadataRequest::new_v2());
         self.eth2_rpc_mut()
             .send_request(peer_id, AppRequestId::Internal, event);
     }
@@ -1196,8 +1116,8 @@ impl<P: Preset> Network<P> {
         &mut self,
         app_request_id: AppRequestId,
         peer_id: PeerId,
-        response: Response<P>,
-    ) -> Option<NetworkEvent<P>> {
+        response: Response,
+    ) -> Option<NetworkEvent> {
         match app_request_id {
             AppRequestId::Internal => None,
             _ => Some(NetworkEvent::ResponseReceived {
@@ -1210,8 +1130,8 @@ impl<P: Preset> Network<P> {
 
     /// Dial cached Enrs in discovery service that are in the given `subnet_id` and aren't
     /// in Connected, Dialing or Banned state.
-    fn dial_cached_enrs_in_subnet(&mut self, chain_config: Arc<ChainConfig>, subnet: Subnet) {
-        let predicate = subnet_predicate::<P>(chain_config, vec![subnet]);
+    fn dial_cached_enrs_in_subnet(&mut self, subnet: Subnet) {
+        let predicate = subnet_predicate(vec![subnet]);
         let peers_to_dial: Vec<Enr> = self
             .discovery()
             .cached_enrs()
@@ -1252,7 +1172,7 @@ impl<P: Preset> Network<P> {
     /* Sub-behaviour event handling functions */
 
     /// Handle a gossipsub event.
-    fn inject_gs_event(&mut self, event: gossipsub::Event) -> Option<NetworkEvent<P>> {
+    fn inject_gs_event(&mut self, event: gossipsub::Event) -> Option<NetworkEvent> {
         match event {
             gossipsub::Event::Message {
                 propagation_source,
@@ -1261,7 +1181,7 @@ impl<P: Preset> Network<P> {
             } => {
                 // Note: We are keeping track here of the peer that sent us the message, not the
                 // peer that originally published the message.
-                match PubsubMessage::decode(&gs_msg.topic, &gs_msg.data, &self.fork_context) {
+                match PubsubMessage::decode(&gs_msg.topic, &gs_msg.data) {
                     Err(e) => {
                         debug!(topic = ?gs_msg.topic, error = e, "Could not decode gossipsub message");
                         //reject the message
@@ -1377,7 +1297,7 @@ impl<P: Preset> Network<P> {
     }
 
     /// Handle an RPC event.
-    fn inject_rpc_event(&mut self, event: RPCMessage<AppRequestId, P>) -> Option<NetworkEvent<P>> {
+    fn inject_rpc_event(&mut self, event: RPCMessage<AppRequestId>) -> Option<NetworkEvent> {
         let peer_id = event.peer_id;
 
         // Do not permit Inbound events from peers that are being disconnected or RPC requests,
@@ -1444,7 +1364,7 @@ impl<P: Preset> Network<P> {
                         let metadata = self.network_globals.local_metadata.read().clone();
                         // The encoder is responsible for sending the negotiated version of the metadata
                         let response =
-                            RpcResponse::Success(RpcSuccessResponse::MetaData(Arc::new(metadata)));
+                            RpcResponse::Success(RpcSuccessResponse::MetaData(metadata));
                         self.send_response(peer_id, inbound_request_id, response);
                         None
                     }
@@ -1473,82 +1393,7 @@ impl<P: Preset> Network<P> {
                             request_type,
                         })
                     }
-                    RequestType::BlocksByRange(ref req) => {
-                        // Still disconnect the peer if the request is naughty.
-                        if req.step() == 0 {
-                            self.peer_manager_mut().handle_rpc_error(
-                                &peer_id,
-                                Protocol::BlocksByRange,
-                                &RPCError::InvalidData(
-                                    "Blocks by range with 0 step parameter".into(),
-                                ),
-                                ConnectionDirection::Incoming,
-                            );
-                            return None;
-                        }
-                        Some(NetworkEvent::RequestReceived {
-                            peer_id,
-                            inbound_request_id,
-                            request_type,
-                        })
-                    }
                     RequestType::BlocksByRoot(_) => {
-                        Some(NetworkEvent::RequestReceived {
-                            peer_id,
-                            inbound_request_id,
-                            request_type,
-                        })
-                    }
-                    RequestType::BlobsByRange(_) => {
-                        Some(NetworkEvent::RequestReceived {
-                            peer_id,
-                            inbound_request_id,
-                            request_type,
-                        })
-                    }
-                    RequestType::BlobsByRoot(_) => {
-                        Some(NetworkEvent::RequestReceived {
-                            peer_id,
-                            inbound_request_id,
-                            request_type,
-                        })
-                    }
-                    RequestType::DataColumnsByRoot(_) => {
-                        Some(NetworkEvent::RequestReceived {
-                            peer_id,
-                            inbound_request_id,
-                            request_type,
-                        })
-                    }
-                    RequestType::DataColumnsByRange(_) => {
-                        Some(NetworkEvent::RequestReceived {
-                            peer_id,
-                            inbound_request_id,
-                            request_type,
-                        })
-                    }
-                    RequestType::LightClientBootstrap(_) => {
-                        Some(NetworkEvent::RequestReceived {
-                            peer_id,
-                            inbound_request_id,
-                            request_type,
-                        })
-                    }
-                    RequestType::LightClientOptimisticUpdate => {
-                        Some(NetworkEvent::RequestReceived {
-                            peer_id,
-                            inbound_request_id,
-                            request_type,
-                        })
-                    }
-                    RequestType::LightClientFinalityUpdate => {
-                        Some(NetworkEvent::RequestReceived {
-                            peer_id,
-                            inbound_request_id,
-                            request_type,
-                        })
-                    }
-                    RequestType::LightClientUpdatesByRange(_) => {
                         Some(NetworkEvent::RequestReceived {
                             peer_id,
                             inbound_request_id,
@@ -1565,11 +1410,9 @@ impl<P: Preset> Network<P> {
                         None
                     }
                     RpcSuccessResponse::MetaData(meta_data) => {
-                        let updated_cgc = self
-                            .peer_manager_mut()
-                            .meta_data_response(&peer_id, *meta_data);
-                        // Send event after calling into peer_manager so the PeerDB is updated.
-                        updated_cgc.then(|| NetworkEvent::PeerUpdatedCustodyGroupCount(peer_id))
+                        self.peer_manager_mut()
+                            .meta_data_response(&peer_id, meta_data);
+                        None
                     }
                     /* Network propagated protocols */
                     RpcSuccessResponse::Status(msg) => {
@@ -1578,56 +1421,14 @@ impl<P: Preset> Network<P> {
                         // propagate the STATUS message upwards
                         self.build_response(id, peer_id, Response::Status(msg))
                     }
-                    RpcSuccessResponse::BlocksByRange(resp) => {
-                        self.build_response(id, peer_id, Response::BlocksByRange(Some(resp)))
-                    }
-                    RpcSuccessResponse::BlobsByRange(resp) => {
-                        self.build_response(id, peer_id, Response::BlobsByRange(Some(resp)))
-                    }
                     RpcSuccessResponse::BlocksByRoot(resp) => {
                         self.build_response(id, peer_id, Response::BlocksByRoot(Some(resp)))
                     }
-                    RpcSuccessResponse::BlobsByRoot(resp) => {
-                        self.build_response(id, peer_id, Response::BlobsByRoot(Some(resp)))
-                    }
-                    RpcSuccessResponse::DataColumnsByRoot(resp) => {
-                        self.build_response(id, peer_id, Response::DataColumnsByRoot(Some(resp)))
-                    }
-                    RpcSuccessResponse::DataColumnsByRange(resp) => {
-                        self.build_response(id, peer_id, Response::DataColumnsByRange(Some(resp)))
-                    }
-                    // Should never be reached
-                    RpcSuccessResponse::LightClientBootstrap(bootstrap) => {
-                        self.build_response(id, peer_id, Response::LightClientBootstrap(bootstrap))
-                    }
-                    RpcSuccessResponse::LightClientOptimisticUpdate(update) => self.build_response(
-                        id,
-                        peer_id,
-                        Response::LightClientOptimisticUpdate(update),
-                    ),
-                    RpcSuccessResponse::LightClientFinalityUpdate(update) => self.build_response(
-                        id,
-                        peer_id,
-                        Response::LightClientFinalityUpdate(update),
-                    ),
-                    RpcSuccessResponse::LightClientUpdatesByRange(update) => self.build_response(
-                        id,
-                        peer_id,
-                        Response::LightClientUpdatesByRange(Some(update)),
-                    ),
                 }
             }
             Ok(RPCReceived::EndOfStream(id, termination)) => {
                 let response = match termination {
-                    ResponseTermination::BlocksByRange => Response::BlocksByRange(None),
                     ResponseTermination::BlocksByRoot => Response::BlocksByRoot(None),
-                    ResponseTermination::BlobsByRange => Response::BlobsByRange(None),
-                    ResponseTermination::BlobsByRoot => Response::BlobsByRoot(None),
-                    ResponseTermination::DataColumnsByRoot => Response::DataColumnsByRoot(None),
-                    ResponseTermination::DataColumnsByRange => Response::DataColumnsByRange(None),
-                    ResponseTermination::LightClientUpdatesByRange => {
-                        Response::LightClientUpdatesByRange(None)
-                    }
                 };
                 self.build_response(id, peer_id, response)
             }
@@ -1635,7 +1436,7 @@ impl<P: Preset> Network<P> {
     }
 
     /// Handle an identify event.
-    fn inject_identify_event(&mut self, event: identify::Event) -> Option<NetworkEvent<P>> {
+    fn inject_identify_event(&mut self, event: identify::Event) -> Option<NetworkEvent> {
         match event {
             identify::Event::Received {
                 peer_id,
@@ -1657,7 +1458,7 @@ impl<P: Preset> Network<P> {
     }
 
     /// Handle a peer manager event.
-    fn inject_pm_event(&mut self, event: PeerManagerEvent) -> Option<NetworkEvent<P>> {
+    fn inject_pm_event(&mut self, event: PeerManagerEvent) -> Option<NetworkEvent> {
         match event {
             PeerManagerEvent::PeerConnectedIncoming(peer_id) => {
                 Some(NetworkEvent::PeerConnectedIncoming(peer_id))
@@ -1754,7 +1555,7 @@ impl<P: Preset> Network<P> {
 
     /* Networking polling */
 
-    pub async fn next_event(&mut self) -> NetworkEvent<P> {
+    pub async fn next_event(&mut self) -> NetworkEvent {
         loop {
             tokio::select! {
                 // Poll the libp2p `Swarm`.
@@ -1785,8 +1586,8 @@ impl<P: Preset> Network<P> {
 
     fn parse_swarm_event(
         &mut self,
-        event: SwarmEvent<BehaviourEvent<P>>,
-    ) -> Option<NetworkEvent<P>> {
+        event: SwarmEvent<BehaviourEvent>,
+    ) -> Option<NetworkEvent> {
         match event {
             SwarmEvent::Behaviour(behaviour_event) => match behaviour_event {
                 // Handle sub-behaviour events.

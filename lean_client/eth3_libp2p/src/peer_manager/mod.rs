@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tracing::{debug, error, trace, warn};
-use types::{phase0::primitives::SubnetId, preset::Preset};
+use types::phase0::primitives::SubnetId;
 
 pub use libp2p::core::Multiaddr;
 pub use libp2p::identity::Keypair;
@@ -148,7 +148,7 @@ pub enum PeerManagerEvent {
 
 impl PeerManager {
     // NOTE: Must be run inside a tokio executor.
-    pub fn new<P: Preset>(
+    pub fn new(
         cfg: config::Config,
         network_globals: Arc<NetworkGlobals>,
     ) -> Result<Self> {
@@ -165,24 +165,6 @@ impl PeerManager {
         // Set up the peer manager heartbeat interval
         let heartbeat = tokio::time::interval(Duration::from_secs(HEARTBEAT_INTERVAL));
 
-        // Compute subnets for all custody groups
-        let chain_config = &network_globals.config;
-        let subnets_by_custody_group = if chain_config.is_peerdas_scheduled() {
-            (0..chain_config.number_of_custody_groups)
-                .map(|custody_index| {
-                    let subnets = compute_subnets_from_custody_group::<P>(
-                        &network_globals.config,
-                        custody_index,
-                    )
-                    .expect("Should compute subnets for all custody groups")
-                    .collect();
-                    (custody_index, subnets)
-                })
-                .collect::<HashMap<_, Vec<SubnetId>>>()
-        } else {
-            HashMap::new()
-        };
-
         Ok(PeerManager {
             network_globals,
             events: SmallVec::new(),
@@ -193,7 +175,6 @@ impl PeerManager {
             target_peers: target_peer_count,
             temporary_banned_peers: LRUTimeCache::new(PEER_RECONNECTION_TIMEOUT),
             sync_committee_subnets: Default::default(),
-            subnets_by_custody_group,
             heartbeat,
             discovery_enabled,
             metrics_enabled,

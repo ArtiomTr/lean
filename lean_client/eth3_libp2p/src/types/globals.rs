@@ -9,7 +9,6 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std_ext::ArcExt as _;
 use types::config::Config as ChainConfig;
-use types::preset::Preset;
 
 pub struct NetworkGlobals {
     /// Ethereum chain configuration. Immutable after initialization.
@@ -37,7 +36,7 @@ pub struct NetworkGlobals {
 }
 
 impl NetworkGlobals {
-    pub fn new<P: Preset>(
+    pub fn new(
         config: Arc<ChainConfig>,
         enr: Enr,
         local_metadata: MetaData,
@@ -148,7 +147,7 @@ impl NetworkGlobals {
     }
 
     /// TESTING ONLY. Build a dummy NetworkGlobals instance.
-    pub fn new_test_globals<P: Preset>(
+    pub fn new_test_globals(
         chain_config: Arc<ChainConfig>,
         trusted_peers: Vec<PeerId>,
         network_config: Arc<NetworkConfig>,
@@ -159,7 +158,7 @@ impl NetworkGlobals {
             syncnets: Default::default(),
         });
 
-        Self::new_test_globals_with_metadata::<P>(
+        Self::new_test_globals_with_metadata(
             chain_config,
             trusted_peers,
             metadata,
@@ -167,7 +166,7 @@ impl NetworkGlobals {
         )
     }
 
-    pub(crate) fn new_test_globals_with_metadata<P: Preset>(
+    pub(crate) fn new_test_globals_with_metadata(
         chain_config: Arc<ChainConfig>,
         trusted_peers: Vec<PeerId>,
         metadata: MetaData,
@@ -177,7 +176,7 @@ impl NetworkGlobals {
         let keypair = libp2p::identity::secp256k1::Keypair::generate();
         let enr_key: discv5::enr::CombinedKey = discv5::enr::CombinedKey::from_secp256k1(&keypair);
         let enr = discv5::enr::Enr::builder().build(&enr_key).unwrap();
-        NetworkGlobals::new::<P>(
+        NetworkGlobals::new(
             chain_config,
             enr,
             metadata,

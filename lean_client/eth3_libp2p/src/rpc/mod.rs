@@ -13,18 +13,15 @@ use libp2p::swarm::{
 };
 use libp2p::swarm::{ConnectionClosed, FromSwarm, SubstreamProtocol, THandlerInEvent};
 use std::collections::HashMap;
-use std::marker::PhantomData;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std_ext::ArcExt as _;
 use tracing::{debug, trace};
-use types::{config::Config as ChainConfig, preset::Preset};
-
-use crate::types::ForkContext;
+use types::config::Config as ChainConfig;
 
 pub(crate) use handler::{HandlerErr, HandlerEvent};
 pub(crate) use methods::{
-    MetaData, MetaDataV1, MetaDataV2, MetaDataV3, Ping, RpcResponse, RpcSuccessResponse,
+    MetaData, MetaDataV1, MetaDataV2, Ping, RpcResponse, RpcSuccessResponse,
 };
 pub use protocol::RequestType;
 
@@ -35,9 +32,9 @@ use crate::rpc::rate_limiter::RateLimiterItem;
 use crate::rpc::response_limiter::ResponseLimiter;
 pub use handler::SubstreamId;
 pub use methods::{
-    BlocksByRangeRequest, BlocksByRootRequest,
+    BlocksByRootRequest,
     GoodbyeReason, ResponseTermination, RpcErrorResponse,
-    StatusMessage, StatusMessageV1, StatusMessageV2,
+    StatusMessage,
 };
 pub use protocol::{Protocol, RPCError};
 
@@ -60,36 +57,36 @@ impl<T> ReqId for T where T: Send + 'static + std::fmt::Debug + Copy + Clone {}
 
 /// RPC events sent from the application.
 #[derive(Debug, Clone)]
-pub enum RPCSend<Id, P: Preset> {
+pub enum RPCSend<Id> {
     /// A request sent from the application.
     ///
     /// The `Id` is given by the application making the request. These
     /// go over *outbound* connections.
-    Request(Id, RequestType<P>),
+    Request(Id, RequestType),
     /// A response sent from the application.
     ///
     /// The `SubstreamId` must correspond to the RPC-given ID of the original request received from the
     /// peer. The second parameter is a single chunk of a response. These go over *inbound*
     /// connections.
-    Response(SubstreamId, RpcResponse<P>),
+    Response(SubstreamId, RpcResponse),
     /// Application has requested to terminate the connection with a goodbye message.
     Shutdown(Id, GoodbyeReason),
 }
 
 /// RPC events received from outside the application.
 #[derive(Debug, Clone)]
-pub enum RPCReceived<Id, P: Preset> {
+pub enum RPCReceived<Id> {
     /// A request received from the outside.
     ///
     /// The `SubstreamId` is given by the `RPCHandler` as it identifies this request with the
     /// *inbound* substream over which it is managed.
-    Request(InboundRequestId, RequestType<P>),
+    Request(InboundRequestId, RequestType),
     /// A response received from the outside.
     ///
     /// The `Id` corresponds to the application given ID of the original request sent to the
     /// peer. The second parameter is a single chunk of a response. These go over *outbound*
     /// connections.
-    Response(Id, RpcSuccessResponse<P>),
+    Response(Id, RpcSuccessResponse),
     /// Marks a request as completed
     EndOfStream(Id, ResponseTermination),
 }
@@ -104,9 +101,9 @@ pub struct InboundRequestId {
 }
 
 // An Active inbound request received via Rpc.
-struct ActiveInboundRequest<P: Preset> {
+struct ActiveInboundRequest {
     pub peer_id: PeerId,
-    pub request_type: RequestType<P>,
+    pub request_type: RequestType,
     pub peer_disconnected: bool,
 }
 
@@ -125,7 +122,7 @@ impl InboundRequestId {
     }
 }
 
-impl<P: Preset, Id: std::fmt::Debug> std::fmt::Display for RPCSend<Id, P> {
+impl<Id: std::fmt::Debug> std::fmt::Display for RPCSend<Id> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             RPCSend::Request(id, req) => write!(f, "RPC Request(id: {:?}, {})", id, req),
@@ -137,52 +134,48 @@ impl<P: Preset, Id: std::fmt::Debug> std::fmt::Display for RPCSend<Id, P> {
 
 /// Messages sent to the user from the RPC protocol.
 #[derive(Debug)]
-pub struct RPCMessage<Id, P: Preset> {
+pub struct RPCMessage<Id> {
     /// The peer that sent the message.
     pub peer_id: PeerId,
     /// Handler managing this message.
     pub connection_id: ConnectionId,
     /// The message that was sent.
-    pub message: Result<RPCReceived<Id, P>, HandlerErr<Id>>,
+    pub message: Result<RPCReceived<Id>, HandlerErr<Id>>,
 }
 
-type BehaviourAction<Id, P> = ToSwarm<RPCMessage<Id, P>, RPCSend<Id, P>>;
+type BehaviourAction<Id> = ToSwarm<RPCMessage<Id>, RPCSend<Id>>;
 
 /// Implements the libp2p `NetworkBehaviour` trait and therefore manages network-level
 /// logic.
-pub struct RPC<Id: ReqId, P: Preset> {
+pub struct RPC<Id: ReqId> {
     chain_config: Arc<ChainConfig>,
     /// Rate limiter for our responses.
-    response_limiter: Option<ResponseLimiter<P>>,
+    response_limiter: Option<ResponseLimiter>,
     /// Rate limiter for our own requests.
-    outbound_request_limiter: SelfRateLimiter<Id, P>,
+    outbound_request_limiter: SelfRateLimiter<Id>,
     /// Active inbound requests that are awaiting a response.
-    active_inbound_requests: HashMap<InboundRequestId, ActiveInboundRequest<P>>,
+    active_inbound_requests: HashMap<InboundRequestId, ActiveInboundRequest>,
     /// Queue of events to be processed.
-    events: Vec<BehaviourAction<Id, P>>,
-    fork_context: Arc<ForkContext>,
-    enable_light_client_server: bool,
+    events: Vec<BehaviourAction<Id>>,
     /// A sequential counter indicating when data gets modified.
     seq_number: u64,
 }
 
-impl<Id: ReqId, P: Preset> RPC<Id, P> {
+impl<Id: ReqId> RPC<Id> {
     pub fn new(
         chain_config: Arc<ChainConfig>,
-        fork_context: Arc<ForkContext>,
-        enable_light_client_server: bool,
         inbound_rate_limiter_config: Option<InboundRateLimiterConfig>,
         outbound_rate_limiter_config: Option<OutboundRateLimiterConfig>,
         seq_number: u64,
     ) -> Self {
         let response_limiter = inbound_rate_limiter_config.map(|config| {
             debug!(?config, "Using response rate limiting params");
-            ResponseLimiter::new(config, fork_context.clone())
+            ResponseLimiter::new(config)
                 .expect("Inbound limiter configuration parameters are valid")
         });
 
-        let outbound_request_limiter: SelfRateLimiter<Id, P> =
-            SelfRateLimiter::new(outbound_rate_limiter_config, fork_context.clone())
+        let outbound_request_limiter: SelfRateLimiter<Id> =
+            SelfRateLimiter::new(outbound_rate_limiter_config)
                 .expect("Outbound limiter configuration parameters are valid");
 
         RPC {
@@ -191,8 +184,6 @@ impl<Id: ReqId, P: Preset> RPC<Id, P> {
             outbound_request_limiter,
             active_inbound_requests: HashMap::new(),
             events: Vec::new(),
-            fork_context,
-            enable_light_client_server,
             seq_number,
         }
     }
@@ -202,8 +193,8 @@ impl<Id: ReqId, P: Preset> RPC<Id, P> {
     pub fn send_response(
         &mut self,
         request_id: InboundRequestId,
-        response: RpcResponse<P>,
-    ) -> Result<(), RpcResponse<P>> {
+        response: RpcResponse,
+    ) -> Result<(), RpcResponse> {
         let Some(ActiveInboundRequest {
             peer_id,
             request_type,
@@ -248,7 +239,7 @@ impl<Id: ReqId, P: Preset> RPC<Id, P> {
         peer_id: PeerId,
         protocol: Protocol,
         request_id: InboundRequestId,
-        response: RpcResponse<P>,
+        response: RpcResponse,
     ) {
         if let Some(response_limiter) = self.response_limiter.as_mut() {
             if !response_limiter.allows(
@@ -273,7 +264,7 @@ impl<Id: ReqId, P: Preset> RPC<Id, P> {
     /// Submits an RPC request.
     ///
     /// The peer must be connected for this to succeed.
-    pub fn send_request(&mut self, peer_id: PeerId, request_id: Id, req: RequestType<P>) {
+    pub fn send_request(&mut self, peer_id: PeerId, request_id: Id, req: RequestType) {
         match self
             .outbound_request_limiter
             .allows(peer_id, request_id, req)
@@ -313,13 +304,9 @@ impl<Id: ReqId, P: Preset> RPC<Id, P> {
     }
 }
 
-impl<Id, P> NetworkBehaviour for RPC<Id, P>
-where
-    P: Preset,
-    Id: ReqId,
-{
-    type ConnectionHandler = RPCHandler<Id, P>;
-    type ToSwarm = RPCMessage<Id, P>;
+impl<Id: ReqId> NetworkBehaviour for RPC<Id> {
+    type ConnectionHandler = RPCHandler<Id>;
+    type ToSwarm = RPCMessage<Id>;
 
     fn handle_established_inbound_connection(
         &mut self,
@@ -331,15 +318,12 @@ where
         let protocol = SubstreamProtocol::new(
             RPCProtocol {
                 chain_config: self.chain_config.clone_arc(),
-                fork_context: self.fork_context.clone(),
                 max_rpc_size: self.chain_config.max_payload_size,
-                enable_light_client_server: self.enable_light_client_server,
-                phantom: PhantomData,
             },
             (),
         );
 
-        let handler = RPCHandler::new(protocol, self.fork_context.clone(), peer_id, connection_id);
+        let handler = RPCHandler::new(protocol, peer_id, connection_id);
 
         Ok(handler)
     }
@@ -355,15 +339,12 @@ where
         let protocol = SubstreamProtocol::new(
             RPCProtocol {
                 chain_config: self.chain_config.clone_arc(),
-                fork_context: self.fork_context.clone(),
                 max_rpc_size: self.chain_config.max_payload_size,
-                enable_light_client_server: self.enable_light_client_server,
-                phantom: PhantomData,
             },
             (),
         );
 
-        let handler = RPCHandler::new(protocol, self.fork_context.clone(), peer_id, connection_id);
+        let handler = RPCHandler::new(protocol, peer_id, connection_id);
 
         Ok(handler)
     }

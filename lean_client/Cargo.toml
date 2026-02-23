@@ -6,6 +6,7 @@ members = [
     "fork_choice",
     "http_api",
     "metrics",
+    "networking",
     "runtime",
     "validator",
     "xmss",
@@ -223,6 +224,7 @@ private_intra_doc_links = 'allow'
 chain = { path = "./chain" }
 containers = { path = "./containers" }
 eth3_libp2p = { path = "./eth3_libp2p" }
+networking = { path = "./eth3_libp2p", package = "eth3_libp2p" }
 fork_choice = { path = "./fork_choice" }
 http_api = { path = "./http_api" }
 metrics = { path = "./metrics" }

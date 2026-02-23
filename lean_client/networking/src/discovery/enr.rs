@@ -7,9 +7,9 @@ use super::ENR_FILENAME;
 use super::enr_ext::CombinedKeyExt;
 use crate::NetworkConfig;
 use crate::types::{Enr, EnrAttestationBitfield, EnrForkId, EnrSyncCommitteeBitfield};
-use bytes::Bytes;
+use alloy_rlp::bytes::Bytes;
 use anyhow::{Result, anyhow};
-use crate::version::{APPLICATION_NAME, APPLICATION_VERSION};
+use grandine_version::{APPLICATION_NAME, APPLICATION_VERSION};
 use libp2p::identity::Keypair;
 use ssz::{SszReadDefault as _, SszWrite};
 use std::fs::File;
@@ -17,7 +17,7 @@ use std::io::prelude::*;
 use std::path::Path;
 use std::str::FromStr;
 use tracing::{debug, warn};
-use types::config::Config as ChainConfig;
+use types::{config::Config as ChainConfig, preset::Preset};
 
 use super::enr_ext::{EnrExt, QUIC_ENR_KEY, QUIC6_ENR_KEY};
 
@@ -27,10 +27,6 @@ pub const ETH2_ENR_KEY: &str = "eth2";
 pub const ATTESTATION_BITFIELD_ENR_KEY: &str = "attnets";
 /// The ENR field specifying the sync committee subnet bitfield.
 pub const SYNC_COMMITTEE_BITFIELD_ENR_KEY: &str = "syncnets";
-/// The ENR field specifying the peerdas custody group count.
-pub const PEERDAS_CUSTODY_GROUP_COUNT_ENR_KEY: &str = "cgc";
-/// The ENR field specifying the digest of the next scheduled fork.
-pub const NEXT_FORK_DIGEST_ENR_KEY: &str = "nfd";
 
 /// Extension trait for ENR's within Eth2.
 pub trait Eth2Enr {
@@ -40,11 +36,8 @@ pub trait Eth2Enr {
     /// The sync committee subnet bitfield associated with the ENR.
     fn sync_committee_bitfield(&self) -> Result<EnrSyncCommitteeBitfield, &'static str>;
 
-    /// The peerdas custody group count associated with the ENR.
-    fn custody_group_count(&self, config: &ChainConfig) -> Result<u64, &'static str>;
-
-    // the digest of the next scheduled fork associated with the ENR.
-    fn next_fork_digest(&self) -> Result<ForkDigest, &'static str>;
+    /// The flag
+    fn is_aggregator(&self) -> Result<bool, &'static str>;
 
     fn eth2(&self) -> Result<EnrForkId, &'static str>;
 }
@@ -166,7 +159,7 @@ pub fn use_or_load_enr(
 ///
 /// If an ENR exists, with the same NodeId, this function checks to see if the loaded ENR from
 /// disk is suitable to use, otherwise we increment our newly generated ENR's sequence number.
-pub fn build_or_load_enr(
+pub fn build_or_load_enr<P: Preset>(
     chain_config: &ChainConfig,
     local_key: Keypair,
     config: &NetworkConfig,

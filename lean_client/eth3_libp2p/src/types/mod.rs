@@ -1,3 +1,4 @@
+mod chain_messages;
 mod enr_fork_id;
 mod fork_context;
 mod globals;
@@ -14,6 +15,7 @@ pub type EnrSyncCommitteeBitfield = BitVector<SyncCommitteeSubnetCount>;
 
 pub type Enr = discv5::enr::Enr<discv5::enr::CombinedKey>;
 
+pub use chain_messages::{ChainMessage, OutboundP2pRequest};
 pub use enr_fork_id::EnrForkId;
 pub use fork_context::ForkContext;
 pub use globals::NetworkGlobals;
