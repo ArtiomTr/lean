@@ -2,6 +2,7 @@ mod attestation;
 mod block;
 mod checkpoint;
 mod config;
+mod primitives;
 mod serde_helpers;
 mod slot;
 mod state;
@@ -19,6 +20,7 @@ pub use block::{
 };
 pub use checkpoint::Checkpoint;
 pub use config::{Config, GenesisConfig};
+pub use primitives::{ForkDigest, SubnetId, Version};
 pub use slot::Slot;
 pub use state::{
     HistoricalBlockHashes, JustificationRoots, JustificationValidators, JustifiedSlots, State,

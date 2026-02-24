@@ -1,7 +1,6 @@
 //! Helper functions and an extension trait for Ethereum 2 ENRs.
 
 pub use discv5::enr::CombinedKey;
-use types::phase0::primitives::ForkDigest;
 
 use super::ENR_FILENAME;
 use super::enr_ext::CombinedKeyExt;
@@ -17,7 +16,6 @@ use std::io::prelude::*;
 use std::path::Path;
 use std::str::FromStr;
 use tracing::{debug, warn};
-use types::{config::Config as ChainConfig, preset::Preset};
 
 use super::enr_ext::{EnrExt, QUIC_ENR_KEY, QUIC6_ENR_KEY};
 
@@ -66,7 +64,8 @@ impl Eth2Enr for Enr {
     }
 
     fn is_aggregator(&self) -> Result<bool, &'static str> {
-        let aggregator = self.get_decodable::<u8>(IS_AGGREGATOR_ENR_KEY)
+        let aggregator = self
+            .get_decodable::<u8>(IS_AGGREGATOR_ENR_KEY)
             .ok_or("ENR aggregator flag non-existent")?
             .map_err(|_| "Could not decode the ENR aggregator flag")?;
 
@@ -145,24 +144,16 @@ pub fn use_or_load_enr(
 ///
 /// If an ENR exists, with the same NodeId, this function checks to see if the loaded ENR from
 /// disk is suitable to use, otherwise we increment our newly generated ENR's sequence number.
-pub fn build_or_load_enr<P: Preset>(
-    chain_config: &ChainConfig,
+pub fn build_or_load_enr(
     local_key: Keypair,
     config: &NetworkConfig,
     enr_fork_id: &EnrForkId,
-    custody_group_count: Option<u64>,
-    next_fork_digest: ForkDigest,
 ) -> Result<Enr> {
     // Build the local ENR.
     // Note: Discovery should update the ENR record's IP to the external IP as seen by the
     // majority of our peers, if the CLI doesn't expressly forbid it.
     let enr_key = CombinedKey::from_libp2p(local_key)?;
-    let mut local_enr = build_enr(
-        chain_config,
-        &enr_key,
-        config,
-        enr_fork_id,
-    )?;
+    let mut local_enr = build_enr(&enr_key, config, enr_fork_id)?;
 
     use_or_load_enr(&enr_key, &mut local_enr, config)?;
     Ok(local_enr)
@@ -170,7 +161,6 @@ pub fn build_or_load_enr<P: Preset>(
 
 /// Builds a ENR given a `NetworkConfig`.
 pub fn build_enr(
-    chain_config: &ChainConfig,
     enr_key: &CombinedKey,
     config: &NetworkConfig,
     enr_fork_id: &EnrForkId,
@@ -334,86 +324,17 @@ mod test {
     use super::*;
     use crate::config::Config as NetworkConfig;
 
-    use types::phase0::primitives::ForkDigest;
-
-    fn make_fulu_config() -> ChainConfig {
-        let mut chain_config = ChainConfig::mainnet();
-        chain_config.fulu_fork_epoch = 10;
-        chain_config
-    }
-
-    fn build_enr_with_config(
-        chain_config: &ChainConfig,
-        config: NetworkConfig,
-        custody_group_count: Option<u64>,
-    ) -> (Enr, CombinedKey) {
+    fn build_enr_with_config(config: NetworkConfig) -> (Enr, CombinedKey) {
         let keypair = libp2p::identity::secp256k1::Keypair::generate();
         let enr_key = CombinedKey::from_secp256k1(&keypair);
         let enr_fork_id = EnrForkId::default();
-        let enr = build_enr(
-            chain_config,
-            &enr_key,
-            &config,
-            &enr_fork_id,
-        )
-        .unwrap();
+        let enr = build_enr(&enr_key, &config, &enr_fork_id).unwrap();
         (enr, enr_key)
     }
 
     #[test]
-    fn test_nfd_enr_encoding() {
-        let chain_config = make_fulu_config();
-        let enr = build_enr_with_config(&chain_config, NetworkConfig::default(), None).0;
-        assert_eq!(enr.next_fork_digest().unwrap(), ForkDigest::default());
-    }
-
-    #[test]
-    fn custody_group_count_default() {
-        let config = NetworkConfig {
-            subscribe_all_data_column_subnets: false,
-            ..NetworkConfig::default()
-        };
-        let chain_config = make_fulu_config();
-
-        let enr = build_enr_with_config(&chain_config, config, None).0;
-
-        assert_eq!(
-            enr.custody_group_count(&chain_config).unwrap(),
-            chain_config.custody_requirement,
-        );
-    }
-
-    #[test]
-    fn custody_group_count_all() {
-        let config = NetworkConfig {
-            subscribe_all_data_column_subnets: true,
-            ..NetworkConfig::default()
-        };
-        let chain_config = make_fulu_config();
-        let enr = build_enr_with_config(&chain_config, config, None).0;
-
-        assert_eq!(
-            enr.custody_group_count(&chain_config).unwrap(),
-            chain_config.number_of_custody_groups,
-        );
-    }
-
-    #[test]
-    fn custody_group_value() {
-        let config = NetworkConfig {
-            subscribe_all_data_column_subnets: true,
-            ..NetworkConfig::default()
-        };
-        let chain_config = make_fulu_config();
-        let enr = build_enr_with_config(&chain_config, config, Some(42)).0;
-
-        assert_eq!(enr.custody_group_count(&chain_config).unwrap(), 42);
-    }
-
-    #[test]
     fn test_encode_decode_eth2_enr() {
-        let chain_config = make_fulu_config();
-        let (enr, _key) = build_enr_with_config(&chain_config, NetworkConfig::default(), None);
+        let (enr, _key) = build_enr_with_config(NetworkConfig::default());
         // Check all Eth2 Mappings are decodeable
         enr.eth2().unwrap();
         enr.attestation_bitfield().unwrap();

@@ -1,6 +1,7 @@
 //! The subnet predicate used for searching for a particular subnet.
-use super::*;
 use tracing::trace;
+
+use crate::{Enr, Subnet};
 
 /// Returns the predicate for a given subnet.
 pub fn subnet_predicate(subnets: Vec<Subnet>) -> impl Fn(&Enr) -> bool + Send {

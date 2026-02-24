@@ -2,6 +2,7 @@
 
 use crate::TopicHash;
 use crate::types::{ForkContext, GossipEncoding, GossipKind, GossipTopic};
+use libp2p::gossipsub;
 use snap::raw::{Decoder, Encoder, decompress_len};
 use ssz::{SszReadDefault, SszWrite as _, WriteError};
 use std::boxed::Box;
@@ -48,32 +49,6 @@ use types::{
 pub enum PubsubMessage<P: Preset> {
     /// Gossipsub message providing notification of a new block.
     BeaconBlock(Arc<SignedBeaconBlock<P>>),
-    /// Gossipsub message providing notification of a [`BlobSidecar`] along with the subnet id where it was received.
-    BlobSidecar(Box<(SubnetId, Arc<BlobSidecar<P>>)>),
-    /// Gossipsub message providing notification of a [`DataColumnSidecar`] along with the subnet id where it was received.
-    DataColumnSidecar(Box<(SubnetId, Arc<DataColumnSidecar<P>>)>),
-    /// Gossipsub message providing notification of a Aggregate attestation and associated proof.
-    AggregateAndProofAttestation(Arc<SignedAggregateAndProof<P>>),
-    /// Gossipsub message providing notification of a raw un-aggregated attestation with its shard id.
-    Attestation(SubnetId, Arc<Attestation<P>>),
-    /// Gossipsub message providing notification of a `SingleAttestation`` with its shard id.
-    SingleAttestation(SubnetId, SingleAttestation),
-    /// Gossipsub message providing notification of a voluntary exit.
-    VoluntaryExit(Box<SignedVoluntaryExit>),
-    /// Gossipsub message providing notification of a new proposer slashing.
-    ProposerSlashing(Box<ProposerSlashing>),
-    /// Gossipsub message providing notification of a new attester slashing.
-    AttesterSlashing(Box<AttesterSlashing<P>>),
-    /// Gossipsub message providing notification of partially aggregated sync committee signatures.
-    SignedContributionAndProof(Box<SignedContributionAndProof<P>>),
-    /// Gossipsub message providing notification of unaggregated sync committee signatures with its subnet id.
-    SyncCommitteeMessage(Box<(SubnetId, SyncCommitteeMessage)>),
-    /// Gossipsub message for BLS to execution change messages.
-    BlsToExecutionChange(Box<SignedBlsToExecutionChange>),
-    /// Gossipsub message providing notification of a light client finality update.
-    LightClientFinalityUpdate(Box<LightClientFinalityUpdate<P>>),
-    /// Gossipsub message providing notification of a light client optimistic update.
-    LightClientOptimisticUpdate(Box<LightClientOptimisticUpdate<P>>),
 }
 
 // Implements the `DataTransform` trait of gossipsub to employ snappy compression
