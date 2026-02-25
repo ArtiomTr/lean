@@ -15,7 +15,7 @@ pub use attestation::{
     SignedAttestation,
 };
 pub use block::{
-    Block, BlockBody, BlockHeader, BlockSignatures, BlockWithAttestation, SignedBlock,
+    Block, BlockBody, BlockHeader, BlockSignatures, BlockWithAttestation,
     SignedBlockWithAttestation,
 };
 pub use checkpoint::Checkpoint;

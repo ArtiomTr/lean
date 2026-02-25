@@ -4026,6 +4026,7 @@ version = "0.0.0"
 dependencies = [
  "alloy-rlp",
  "anyhow",
+ "async-trait",
  "containers",
  "dirs",
  "discv5",
@@ -4037,6 +4038,7 @@ dependencies = [
  "lru",
  "parking_lot",
  "prometheus",
+ "regex",
  "serde",
  "snap",
  "ssz",
@@ -4044,7 +4046,9 @@ dependencies = [
  "tiny-keccak",
  "tokio",
  "tracing",
+ "try_from_iterator",
  "typenum",
+ "unsigned-varint 0.8.0",
 ]
 
 [[package]]

@@ -4,6 +4,7 @@ mod config;
 mod discovery;
 mod listen_addr;
 mod reqresp;
+mod rpc;
 mod types;
 
 use std::str::FromStr;

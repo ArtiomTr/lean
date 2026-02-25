@@ -69,13 +69,6 @@ pub struct SignedBlockWithAttestation {
     pub signature: BlockSignatures,
 }
 
-/// Legacy signed block structure (kept for backwards compatibility).
-#[derive(Clone, Debug, Ssz)]
-pub struct SignedBlock {
-    pub message: Block,
-    pub signature: Signature,
-}
-
 impl SignedBlockWithAttestation {
     /// Verify all XMSS signatures in this signed block.
     ///
