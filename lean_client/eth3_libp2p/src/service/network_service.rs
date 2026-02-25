@@ -1,10 +1,10 @@
 use crate::NetworkConfig;
 use crate::service::Network;
-use crate::service::utils::load_private_key;
 use crate::service::utils::Context as ServiceContext;
+use crate::service::utils::load_private_key;
 use crate::task_executor::{ShutdownReason, TaskExecutor};
-use crate::types::{ChainMessage, EnrForkId, ForkContext, OutboundP2pRequest};
 use crate::types::pubsub::PubsubMessage;
+use crate::types::{ChainMessage, EnrForkId, ForkContext, OutboundP2pRequest};
 use anyhow::Result;
 use futures::channel::mpsc as futures_mpsc;
 use libp2p::identity::Keypair;
@@ -57,13 +57,7 @@ impl NetworkService {
         let (signal_tx, _signal_rx) = futures_mpsc::channel::<ShutdownReason>(1);
         let executor = TaskExecutor::new(signal_tx);
 
-        let (network, _globals) = Network::new(
-            chain_config,
-            executor,
-            ctx,
-            keypair,
-        )
-        .await?;
+        let (network, _globals) = Network::new(chain_config, executor, ctx, keypair).await?;
 
         Ok(Self {
             network,

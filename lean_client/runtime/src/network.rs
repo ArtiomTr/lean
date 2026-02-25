@@ -32,11 +32,11 @@ use std::sync::{Arc, atomic::AtomicU64};
 use anyhow::Result;
 use containers::{SignedAttestation, SignedBlockWithAttestation};
 use libp2p_identity::Keypair;
-use ssz::H256;
 use networking::{
     service::{NetworkService, NetworkServiceConfig},
     types::{ChainMessage, OutboundP2pRequest},
 };
+use ssz::H256;
 use tokio::sync::mpsc;
 use tracing::error;
 
@@ -147,9 +147,15 @@ impl EventSource for NetworkEventSource {
             while let Some(effect) = effect_rx.recv().await {
                 let Effect::Network(network_effect) = effect;
                 let request = match network_effect {
-                    NetworkEffect::GossipBlock(block) => OutboundP2pRequest::GossipBlockWithAttestation(block),
-                    NetworkEffect::GossipAttestation(att) => OutboundP2pRequest::GossipAttestation(att),
-                    NetworkEffect::RequestBlocksByRoot(roots) => OutboundP2pRequest::RequestBlocksByRoot(roots),
+                    NetworkEffect::GossipBlock(block) => {
+                        OutboundP2pRequest::GossipBlockWithAttestation(block)
+                    }
+                    NetworkEffect::GossipAttestation(att) => {
+                        OutboundP2pRequest::GossipAttestation(att)
+                    }
+                    NetworkEffect::RequestBlocksByRoot(roots) => {
+                        OutboundP2pRequest::RequestBlocksByRoot(roots)
+                    }
                 };
                 if outbound_tx.send(request).is_err() {
                     // NetworkService has stopped; shut down gracefully.

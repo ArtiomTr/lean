@@ -1,4 +1,4 @@
-use libp2p::{connection_limits, gossipsub, identify, request_response};
+use libp2p::{connection_limits, gossipsub, identify};
 
 use crate::{discovery::Discovery, types::SnappyTransform};
 
@@ -13,7 +13,7 @@ pub struct Behaviour {
     // pub peer_manager: PeerManager,
     /// The Eth2 RPC specified in the wire-0 protocol.
     // pub eth2_rpc: RPC<RequestId<AppReqId>, P>,
-    pub reqresp: request_response::Behaviour<_>,
+    // pub reqresp: request_response::Behaviour<_>,
     /// Discv5 Discovery protocol.
     pub discovery: Discovery,
     /// Keep regular connection to peers and disconnect if absent.

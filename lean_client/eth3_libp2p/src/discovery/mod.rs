@@ -15,8 +15,8 @@ pub use enr::{CombinedKey, Eth2Enr, build_enr, load_enr_from_disk, use_or_load_e
 pub use enr_ext::{CombinedKeyExt, EnrExt, peer_id_to_node_id};
 pub use libp2p::identity::{Keypair, PublicKey};
 
-use bytes::Bytes;
 use anyhow::{Error, Result, anyhow};
+use bytes::Bytes;
 use enr::{
     ATTESTATION_BITFIELD_ENR_KEY, ETH2_ENR_KEY, NEXT_FORK_DIGEST_ENR_KEY,
     PEERDAS_CUSTODY_GROUP_COUNT_ENR_KEY, SYNC_COMMITTEE_BITFIELD_ENR_KEY,
@@ -776,8 +776,7 @@ impl Discovery {
         // Only start a discovery query if we have a subnet to look for.
         if !filtered_subnet_queries.is_empty() {
             // build the subnet predicate as a combination of the eth2_fork_predicate and the subnet predicate
-            let subnet_predicate =
-                subnet_predicate(filtered_subnets);
+            let subnet_predicate = subnet_predicate(filtered_subnets);
 
             debug!(
                 subnets = ?filtered_subnet_queries,
@@ -897,9 +896,7 @@ impl Discovery {
                             self.add_subnet_query(query.subnet, query.min_ttl, query.retries + 1);
 
                             // Check the specific subnet against the enr
-                            let subnet_predicate = subnet_predicate(
-                                vec![query.subnet],
-                            );
+                            let subnet_predicate = subnet_predicate(vec![query.subnet]);
 
                             r.clone()
                                 .into_iter()

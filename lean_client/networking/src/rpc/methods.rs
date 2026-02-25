@@ -7,9 +7,8 @@ use containers::{Checkpoint, SignedBlockWithAttestation};
 use regex::bytes::Regex;
 use serde::Serialize;
 use ssz::{
-    ContiguousList, DynamicList, ReadError, Size, Ssz, SszRead, SszSize, SszWrite, WriteError,
+    ContiguousList, DynamicList, H256, ReadError, Size, Ssz, SszRead, SszSize, SszWrite, WriteError,
 };
-use std::marker::PhantomData;
 use std::{ops::Deref, sync::Arc};
 use strum::IntoStaticStr;
 use try_from_iterator::TryFromIterator as _;
@@ -183,27 +182,11 @@ pub struct BlocksByRootRequestV1 {
 }
 
 impl BlocksByRootRequest {
-    pub fn new(
-        config: &ChainConfig,
-        phase: Phase,
-        block_roots: impl Iterator<Item = H256>,
-    ) -> Self {
+    pub fn new(block_roots: impl Iterator<Item = H256>) -> Self {
         let block_roots = DynamicList::from_iter_with_maximum(
             block_roots,
-            config.max_request_blocks(phase) as usize,
-        );
-
-        Self::V2(BlocksByRootRequestV1 { block_roots })
-    }
-
-    pub fn new_v1(
-        config: &ChainConfig,
-        phase: Phase,
-        block_roots: impl Iterator<Item = H256>,
-    ) -> Self {
-        let block_roots = DynamicList::from_iter_with_maximum(
-            block_roots,
-            config.max_request_blocks(phase) as usize,
+            // TODO(networking): this place must be fixed before prod
+            1024,
         );
 
         Self::V1(BlocksByRootRequestV1 { block_roots })
@@ -212,21 +195,19 @@ impl BlocksByRootRequest {
     pub fn len(&self) -> usize {
         match self {
             Self::V1(req) => req.block_roots.len(),
-            Self::V2(req) => req.block_roots.len(),
         }
     }
 
     pub fn block_roots(self) -> DynamicList<H256> {
         match self {
             Self::V1(req) => req.block_roots,
-            Self::V2(req) => req.block_roots,
         }
     }
 
-    pub fn max_request_blocks(&self, config: &ChainConfig) -> u64 {
+    pub fn max_request_blocks(&self) -> u64 {
         match self {
-            Self::V1(_) => config.max_request_blocks,
-            Self::V2(_) => config.max_request_blocks_deneb,
+            // TODO(networking): this place must be fixed before prod
+            Self::V1(_) => 1024,
         }
     }
 }
@@ -376,7 +357,7 @@ impl fmt::Display for StatusMessage {
     }
 }
 
-impl<P: Preset> fmt::Display for RpcSuccessResponse {
+impl fmt::Display for RpcSuccessResponse {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RpcSuccessResponse::Status(status) => write!(f, "{}", status),
@@ -387,7 +368,7 @@ impl<P: Preset> fmt::Display for RpcSuccessResponse {
     }
 }
 
-impl<P: Preset> std::fmt::Display for RpcResponse {
+impl std::fmt::Display for RpcResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             RpcResponse::Success(res) => write!(f, "{}", res),

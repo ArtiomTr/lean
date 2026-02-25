@@ -11,14 +11,13 @@ use crate::types::ForkContext;
 use fnv::FnvHashMap;
 use futures::SinkExt;
 use futures::prelude::*;
-use helper_functions::misc;
+// use helper_functions::misc;
 use libp2p::PeerId;
 use libp2p::swarm::handler::{
     ConnectionEvent, ConnectionHandler, ConnectionHandlerEvent, DialUpgradeError,
     FullyNegotiatedInbound, FullyNegotiatedOutbound, StreamUpgradeError, SubstreamProtocol,
 };
 use libp2p::swarm::{ConnectionId, Stream};
-use logging::exception;
 use smallvec::SmallVec;
 use std::{
     collections::{VecDeque, hash_map::Entry},
@@ -29,8 +28,7 @@ use std::{
 };
 use tokio::time::{Sleep, sleep};
 use tokio_util::time::{DelayQueue, delay_queue};
-use tracing::{debug, trace};
-use types::preset::Preset;
+use tracing::{debug, error, trace};
 
 /// The number of times to retry an outbound upgrade in the case of IO errors.
 const IO_ERROR_RETRIES: u8 = 3;
@@ -54,12 +52,12 @@ impl SubstreamId {
     }
 }
 
-type InboundSubstream<P> = InboundFramed<Stream, P>;
+type InboundSubstream = InboundFramed<Stream>;
 
 /// Events the handler emits to the behaviour.
 #[derive(Debug)]
-pub enum HandlerEvent<Id, P: Preset> {
-    Ok(RPCReceived<Id, P>),
+pub enum HandlerEvent<Id> {
+    Ok(RPCReceived<Id>),
     Err(HandlerErr<Id>),
     Close(RPCError),
 }
@@ -91,35 +89,32 @@ pub enum HandlerErr<Id> {
 }
 
 /// Implementation of `ConnectionHandler` for the RPC protocol.
-pub struct RPCHandler<Id, P>
-where
-    P: Preset,
-{
+pub struct RPCHandler<Id> {
     /// The PeerId matching this `ConnectionHandler`.
     peer_id: PeerId,
 
     /// The ConnectionId matching this `ConnectionHandler`.
     connection_id: ConnectionId,
     /// The upgrade for inbound substreams.
-    listen_protocol: SubstreamProtocol<RPCProtocol<P>, ()>,
+    listen_protocol: SubstreamProtocol<RPCProtocol, ()>,
 
     /// Queue of events to produce in `poll()`.
-    events_out: SmallVec<[HandlerEvent<Id, P>; 4]>,
+    events_out: SmallVec<[HandlerEvent<Id>; 4]>,
 
     /// Queue of outbound substreams to open.
-    dial_queue: SmallVec<[(Id, RequestType<P>); 4]>,
+    dial_queue: SmallVec<[(Id, RequestType); 4]>,
 
     /// Current number of concurrent outbound substreams being opened.
     dial_negotiated: u32,
 
     /// Current inbound substreams awaiting processing.
-    inbound_substreams: FnvHashMap<SubstreamId, InboundInfo<P>>,
+    inbound_substreams: FnvHashMap<SubstreamId, InboundInfo>,
 
     /// Inbound substream `DelayQueue` which keeps track of when an inbound substream will timeout.
     inbound_substreams_delay: DelayQueue<SubstreamId>,
 
     /// Map of outbound substreams that need to be driven to completion.
-    outbound_substreams: FnvHashMap<SubstreamId, OutboundInfo<Id, P>>,
+    outbound_substreams: FnvHashMap<SubstreamId, OutboundInfo<Id>>,
 
     /// Inbound substream `DelayQueue` which keeps track of when an inbound substream will timeout.
     outbound_substreams_delay: DelayQueue<SubstreamId>,
@@ -161,11 +156,11 @@ enum HandlerState {
 }
 
 /// Contains the information the handler keeps on established inbound substreams.
-struct InboundInfo<P: Preset> {
+struct InboundInfo {
     /// State of the substream.
-    state: InboundState<P>,
+    state: InboundState,
     /// Responses queued for sending.
-    pending_items: VecDeque<RpcResponse<P>>,
+    pending_items: VecDeque<RpcResponse>,
     /// Protocol of the original request we received from the peer.
     protocol: Protocol,
     /// Responses that the peer is still expecting from us.
@@ -178,9 +173,9 @@ struct InboundInfo<P: Preset> {
 }
 
 /// Contains the information the handler keeps on established outbound substreams.
-struct OutboundInfo<Id, P: Preset> {
+struct OutboundInfo<Id> {
     /// State of the substream.
-    state: OutboundSubstreamState<P>,
+    state: OutboundSubstreamState,
     /// Key to keep track of the substream's timeout via `self.outbound_substreams_delay`.
     delay_key: delay_queue::Key,
     /// Info over the protocol this substream is handling.
@@ -192,39 +187,36 @@ struct OutboundInfo<Id, P: Preset> {
 }
 
 /// State of an inbound substream connection.
-enum InboundState<P: Preset> {
+enum InboundState {
     /// The underlying substream is not being used.
-    Idle(InboundSubstream<P>),
+    Idle(InboundSubstream),
     /// The underlying substream is processing responses.
     /// The return value of the future is (substream, stream_was_closed). The stream_was_closed boolean
     /// indicates if the stream was closed due to an error or successfully completing a response.
-    Busy(Pin<Box<dyn Future<Output = Result<(InboundSubstream<P>, bool), RPCError>> + Send>>),
+    Busy(Pin<Box<dyn Future<Output = Result<(InboundSubstream, bool), RPCError>> + Send>>),
     /// Temporary state during processing
     Poisoned,
 }
 
 /// State of an outbound substream. Either waiting for a response, or in the process of sending.
-pub enum OutboundSubstreamState<P: Preset> {
+pub enum OutboundSubstreamState {
     /// A request has been sent, and we are awaiting a response. This future is driven in the
     /// handler because GOODBYE requests can be handled and responses dropped instantly.
     RequestPendingResponse {
         /// The framed negotiated substream.
-        substream: Box<OutboundFramed<Stream, P>>,
+        substream: Box<OutboundFramed<Stream>>,
         /// Keeps track of the actual request sent.
-        request: RequestType<P>,
+        request: RequestType,
     },
     /// Closing an outbound substream>
-    Closing(Box<OutboundFramed<Stream, P>>),
+    Closing(Box<OutboundFramed<Stream>>),
     /// Temporary state during processing
     Poisoned,
 }
 
-impl<Id, P> RPCHandler<Id, P>
-where
-    P: Preset,
-{
+impl<Id> RPCHandler<Id> {
     pub fn new(
-        listen_protocol: SubstreamProtocol<RPCProtocol<P>, ()>,
+        listen_protocol: SubstreamProtocol<RPCProtocol, ()>,
         fork_context: Arc<ForkContext>,
         peer_id: PeerId,
         connection_id: ConnectionId,
@@ -284,7 +276,7 @@ where
     }
 
     /// Opens an outbound substream with a request.
-    fn send_request(&mut self, id: Id, req: RequestType<P>) {
+    fn send_request(&mut self, id: Id, req: RequestType) {
         match self.state {
             HandlerState::Active => {
                 self.dial_queue.push((id, req));
@@ -302,7 +294,7 @@ where
     /// Sends a response to a peer's request.
     // NOTE: If the substream has closed due to inactivity, or the substream is in the
     // wrong state a response will fail silently.
-    fn send_response(&mut self, inbound_id: SubstreamId, response: RpcResponse<P>) {
+    fn send_response(&mut self, inbound_id: SubstreamId, response: RpcResponse) {
         // check if the stream matching the response still exists
         let Some(inbound_info) = self.inbound_substreams.get_mut(&inbound_id) else {
             if !matches!(response, RpcResponse::StreamTermination(..)) {
@@ -338,16 +330,12 @@ where
     }
 }
 
-impl<Id, P> ConnectionHandler for RPCHandler<Id, P>
-where
-    P: Preset,
-    Id: ReqId,
-{
-    type FromBehaviour = RPCSend<Id, P>;
-    type ToBehaviour = HandlerEvent<Id, P>;
-    type InboundProtocol = RPCProtocol<P>;
-    type OutboundProtocol = OutboundRequestContainer<P>;
-    type OutboundOpenInfo = (Id, RequestType<P>); // Keep track of the id and the request
+impl<Id: ReqId> ConnectionHandler for RPCHandler<Id> {
+    type FromBehaviour = RPCSend<Id>;
+    type ToBehaviour = HandlerEvent<Id>;
+    type InboundProtocol = RPCProtocol;
+    type OutboundProtocol = OutboundRequestContainer;
+    type OutboundOpenInfo = (Id, RequestType); // Keep track of the id and the request
     type InboundOpenInfo = ();
 
     fn listen_protocol(&self) -> SubstreamProtocol<Self::InboundProtocol, ()> {
@@ -449,7 +437,7 @@ where
                     outbound_err,
                 )));
             } else {
-                exception!(peer_id = %self.peer_id,
+                error!(peer_id = %self.peer_id,
                     connection_id = %self.connection_id,
                     stream_id = ?outbound_id.get_ref(), "timed out substream not in the books");
             }
@@ -816,7 +804,7 @@ where
                     }
                 }
                 OutboundSubstreamState::Poisoned => {
-                    exception!(
+                    error!(
                         peer_id = %self.peer_id,
                         connection_id = %self.connection_id,
                         "Poisoned outbound substream"
@@ -898,58 +886,16 @@ where
     }
 }
 
-impl<Id, P: Preset> RPCHandler<Id, P>
-where
-    Id: ReqId,
-    P: Preset,
-{
-    fn on_fully_negotiated_inbound(&mut self, substream: InboundOutput<Stream, P>) {
+impl<Id: ReqId> RPCHandler<Id> {
+    fn on_fully_negotiated_inbound(&mut self, substream: InboundOutput<Stream>) {
         // only accept new peer requests when active
         if !matches!(self.state, HandlerState::Active) {
             return;
         }
 
         let (req, substream) = substream;
-        let phase = self.fork_context.current_fork_name();
-        let chain_config = &self.fork_context.chain_config();
 
-        match &req {
-            RequestType::BlocksByRange(request) => {
-                let max_allowed = chain_config.max_request_blocks(phase);
-                if request.count() > max_allowed {
-                    self.events_out.push(HandlerEvent::Err(HandlerErr::Inbound {
-                        id: self.current_inbound_substream_id,
-                        proto: Protocol::BlocksByRange,
-                        error: RPCError::InvalidData(format!(
-                            "requested exceeded limit. allowed: {}, requested: {}",
-                            max_allowed,
-                            request.count()
-                        )),
-                    }));
-                    return self.shutdown(None);
-                }
-            }
-            RequestType::BlobsByRange(request) => {
-                let epoch = misc::compute_epoch_at_slot::<P>(request.start_slot);
-                let max_requested_blobs = request.max_blobs_requested(&chain_config, epoch);
-                let max_allowed = chain_config.max_request_blob_sidecars(phase);
-                if max_requested_blobs > max_allowed {
-                    self.events_out.push(HandlerEvent::Err(HandlerErr::Inbound {
-                        id: self.current_inbound_substream_id,
-                        proto: Protocol::BlobsByRange,
-                        error: RPCError::InvalidData(format!(
-                            "requested exceeded limit. allowed: {}, requested: {}",
-                            max_allowed, max_requested_blobs
-                        )),
-                    }));
-                    return self.shutdown(None);
-                }
-            }
-            _ => {}
-        };
-
-        let max_responses =
-            req.max_responses(&chain_config, self.fork_context.current_fork_epoch());
+        let max_responses = req.max_responses();
 
         // store requests that expect responses
         if max_responses > 0 {
@@ -999,8 +945,8 @@ where
 
     fn on_fully_negotiated_outbound(
         &mut self,
-        substream: OutboundFramed<Stream, P>,
-        (id, request): (Id, RequestType<P>),
+        substream: OutboundFramed<Stream>,
+        (id, request): (Id, RequestType),
     ) {
         self.dial_negotiated -= 1;
         // Reset any io-retries counter.
@@ -1018,11 +964,8 @@ where
                 }));
         }
 
-        let chain_config = &self.fork_context.chain_config();
-
         // add the stream to substreams if we expect a response, otherwise drop the stream.
-        let max_responses =
-            request.max_responses(&chain_config, self.fork_context.current_fork_epoch());
+        let max_responses = request.max_responses();
         if max_responses > 0 {
             let max_remaining_chunks = if request.expect_exactly_one_response() {
                 // Currently enforced only for multiple responses
@@ -1052,7 +995,7 @@ where
                 )
                 .is_some()
             {
-                exception!(
+                error!(
                     peer_id = %self.peer_id,
                     connection_id = %self.connection_id,
                     id = ?self.current_outbound_substream_id, "Duplicate outbound substream id");
@@ -1062,7 +1005,7 @@ where
     }
     fn on_dial_upgrade_error(
         &mut self,
-        request_info: (Id, RequestType<P>),
+        request_info: (Id, RequestType),
         error: StreamUpgradeError<RPCError>,
     ) {
         // This dialing is now considered failed
@@ -1107,11 +1050,11 @@ where
 ///
 /// This function returns the given substream, along with whether it has been closed or not. Any
 /// error that occurred with sending a message is reported also.
-async fn send_message_to_inbound_substream<P: Preset>(
-    mut substream: InboundSubstream<P>,
-    message: RpcResponse<P>,
+async fn send_message_to_inbound_substream(
+    mut substream: InboundSubstream,
+    message: RpcResponse,
     last_chunk: bool,
-) -> Result<(InboundSubstream<P>, bool), RPCError> {
+) -> Result<(InboundSubstream, bool), RPCError> {
     if matches!(message, RpcResponse::StreamTermination(_)) {
         substream.close().await.map(|_| (substream, true))
     } else {

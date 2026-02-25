@@ -158,12 +158,7 @@ impl NetworkGlobals {
             syncnets: Default::default(),
         });
 
-        Self::new_test_globals_with_metadata(
-            chain_config,
-            trusted_peers,
-            metadata,
-            network_config,
-        )
+        Self::new_test_globals_with_metadata(chain_config, trusted_peers, metadata, network_config)
     }
 
     pub(crate) fn new_test_globals_with_metadata(
@@ -187,4 +182,3 @@ impl NetworkGlobals {
         )
     }
 }
-

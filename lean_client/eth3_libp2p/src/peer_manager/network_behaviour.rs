@@ -14,9 +14,9 @@ use libp2p::swarm::dummy::ConnectionHandler;
 use libp2p::swarm::{ConnectionDenied, ConnectionId, NetworkBehaviour, ToSwarm};
 use tracing::{debug, error, trace};
 
+use crate::ClearDialError;
 use crate::discovery::enr_ext::EnrExt;
 use crate::types::SyncState;
-use crate::ClearDialError;
 
 use super::{ConnectingType, PeerManager, PeerManagerEvent};
 
@@ -307,7 +307,6 @@ impl PeerManager {
         // here and the peer manager has no knowledge of its connection. We insert it here for
         // reference so that peer manager can track this peer.
         self.inject_disconnect(&peer_id);
-
     }
 
     /// A dial attempt has failed.

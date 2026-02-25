@@ -5,7 +5,10 @@ use typenum::Unsigned;
 use types::{
     config::Config as ChainConfig,
     nonstandard::Phase,
-    phase0::{consts::AttestationSubnetCount, primitives::{ForkDigest, SubnetId}},
+    phase0::{
+        consts::AttestationSubnetCount,
+        primitives::{ForkDigest, SubnetId},
+    },
 };
 
 use crate::Subnet;
@@ -26,10 +29,7 @@ pub fn core_topics_to_subscribe(
     _current_phase: Phase,
     opts: &TopicConfig,
 ) -> Vec<GossipKind> {
-    let mut topics = vec![
-        GossipKind::BeaconBlock,
-        GossipKind::BeaconAggregateAndProof,
-    ];
+    let mut topics = vec![GossipKind::BeaconBlock, GossipKind::BeaconAggregateAndProof];
 
     if opts.subscribe_all_subnets {
         for i in 0..AttestationSubnetCount::U64 {
@@ -91,7 +91,11 @@ pub enum GossipEncoding {
 
 impl GossipTopic {
     pub fn new(kind: GossipKind, encoding: GossipEncoding, fork_digest: ForkDigest) -> Self {
-        GossipTopic { encoding, fork_digest, kind }
+        GossipTopic {
+            encoding,
+            fork_digest,
+            kind,
+        }
     }
 
     pub fn encoding(&self) -> &GossipEncoding {
@@ -128,7 +132,11 @@ impl GossipTopic {
                 },
             };
 
-            return Ok(GossipTopic { encoding, fork_digest, kind });
+            return Ok(GossipTopic {
+                encoding,
+                fork_digest,
+                kind,
+            });
         }
 
         Err(format!("Unknown topic: {}", topic))
@@ -161,7 +169,11 @@ impl std::fmt::Display for GossipTopic {
         };
         let kind_str = self.kind.to_string();
         let fork_digest_hex = hex::encode(self.fork_digest);
-        write!(f, "/{}/{}/{}/{}", TOPIC_PREFIX, fork_digest_hex, kind_str, encoding)
+        write!(
+            f,
+            "/{}/{}/{}/{}",
+            TOPIC_PREFIX, fork_digest_hex, kind_str, encoding
+        )
     }
 }
 

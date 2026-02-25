@@ -28,3 +28,6 @@ async-trait = { workspace = true }
 unsigned-varint = { workspace = true }
 regex = { workspace = true }
 try_from_iterator = { workspace = true }
+std_ext = { workspace = true }
+tokio-util = { workspace = true }
+smallvec = { workspace = true }

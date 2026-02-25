@@ -49,11 +49,7 @@ impl SSZSnappyInboundCodec {
     }
 
     /// Encodes RPC Responses sent to peers.
-    fn encode_response(
-        &mut self,
-        item: RpcResponse,
-        dst: &mut BytesMut,
-    ) -> Result<(), RPCError> {
+    fn encode_response(&mut self, item: RpcResponse, dst: &mut BytesMut) -> Result<(), RPCError> {
         let bytes = match &item {
             RpcResponse::Success(resp) => match &resp {
                 RpcSuccessResponse::Status(res) => res.to_ssz()?,
@@ -189,10 +185,7 @@ pub struct SSZSnappyOutboundCodec {
 }
 
 impl SSZSnappyOutboundCodec {
-    pub fn new(
-        protocol: ProtocolId,
-        max_packet_size: usize,
-    ) -> Self {
+    pub fn new(protocol: ProtocolId, max_packet_size: usize) -> Self {
         let uvi_codec = Uvi::default();
         // this encoding only applies to ssz_snappy.
         debug_assert_eq!(protocol.encoding, Encoding::SSZSnappy);
@@ -397,7 +390,6 @@ fn handle_error<T>(
     }
 }
 
-
 /// Decodes the length-prefix from the bytes as an unsigned protobuf varint.
 ///
 /// Returns `Ok(Some(length))` by decoding the bytes if required.
@@ -432,11 +424,9 @@ fn handle_rpc_request(
     decoded_buffer: &[u8],
 ) -> Result<Option<RequestType>, RPCError> {
     match versioned_protocol {
-        SupportedProtocol::StatusV1 | SupportedProtocol::StatusV2 => {
-            Ok(Some(RequestType::Status(
-                Status::from_ssz_default(decoded_buffer)?,
-            )))
-        }
+        SupportedProtocol::StatusV1 | SupportedProtocol::StatusV2 => Ok(Some(RequestType::Status(
+            Status::from_ssz_default(decoded_buffer)?,
+        ))),
         SupportedProtocol::GoodbyeV1 => Ok(Some(RequestType::Goodbye(
             GoodbyeReason::from_ssz_default(decoded_buffer)?,
         ))),
@@ -480,11 +470,9 @@ fn handle_rpc_response(
     decoded_buffer: &[u8],
 ) -> Result<Option<RpcSuccessResponse>, RPCError> {
     match versioned_protocol {
-        SupportedProtocol::StatusV1 | SupportedProtocol::StatusV2 => {
-            Ok(Some(RpcSuccessResponse::Status(
-                Status::from_ssz_default(decoded_buffer)?,
-            )))
-        }
+        SupportedProtocol::StatusV1 | SupportedProtocol::StatusV2 => Ok(Some(
+            RpcSuccessResponse::Status(Status::from_ssz_default(decoded_buffer)?),
+        )),
         // This case should be unreachable as `Goodbye` has no response.
         SupportedProtocol::GoodbyeV1 => Err(RPCError::InvalidData(
             "Goodbye RPC message has no valid response".to_string(),
@@ -505,5 +493,3 @@ fn handle_rpc_response(
         )))),
     }
 }
-
-

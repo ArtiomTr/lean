@@ -140,9 +140,7 @@ impl ResponseLimiter {
                         response.response.clone(),
                         response.protocol,
                     ) {
-                        Ok(()) => {
-                            responses.push(response)
-                        }
+                        Ok(()) => responses.push(response),
                         Err(wait_time) => {
                             // The response was taken from the queue, but the limiter didn't allow it.
                             queue.push_front(response);

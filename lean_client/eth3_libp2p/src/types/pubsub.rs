@@ -2,7 +2,9 @@
 
 use crate::TopicHash;
 use crate::types::{GossipEncoding, GossipKind, GossipTopic};
-use containers::{SignedAttestation, SignedAggregatedAttestation, SignedBlockWithAttestation, Slot};
+use containers::{
+    SignedAggregatedAttestation, SignedAttestation, SignedBlockWithAttestation, Slot,
+};
 use snap::raw::{Decoder, Encoder, decompress_len};
 use ssz::{SszReadDefault, SszWrite as _, WriteError};
 use std::io::{Error, ErrorKind};
@@ -95,31 +97,31 @@ impl PubsubMessage {
         }
     }
 
-    pub fn decode(
-        topic: &TopicHash,
-        data: &[u8],
-    ) -> Result<Self, String> {
+    pub fn decode(topic: &TopicHash, data: &[u8]) -> Result<Self, String> {
         match GossipTopic::decode(topic.as_str()) {
             Err(_) => Err(format!("Unknown gossipsub topic: {:?}", topic)),
-            Ok(gossip_topic) => {
-                match gossip_topic.kind() {
-                    GossipKind::BeaconAggregateAndProof => {
-                        let agg_and_proof = SignedAggregatedAttestation::from_ssz_default(data)
-                            .map_err(|e| format!("{:?}", e))?;
-                        Ok(PubsubMessage::AggregateAndProofAttestation(Arc::new(agg_and_proof)))
-                    }
-                    GossipKind::Attestation(subnet_id) => {
-                        let attestation = SignedAttestation::from_ssz_default(data)
-                            .map_err(|e| format!("{:?}", e))?;
-                        Ok(PubsubMessage::Attestation(*subnet_id, Arc::new(attestation)))
-                    }
-                    GossipKind::BeaconBlock => {
-                        let block = SignedBlockWithAttestation::from_ssz_default(data)
-                            .map_err(|e| format!("{:?}", e))?;
-                        Ok(PubsubMessage::Block(Arc::new(block)))
-                    }
+            Ok(gossip_topic) => match gossip_topic.kind() {
+                GossipKind::BeaconAggregateAndProof => {
+                    let agg_and_proof = SignedAggregatedAttestation::from_ssz_default(data)
+                        .map_err(|e| format!("{:?}", e))?;
+                    Ok(PubsubMessage::AggregateAndProofAttestation(Arc::new(
+                        agg_and_proof,
+                    )))
                 }
-            }
+                GossipKind::Attestation(subnet_id) => {
+                    let attestation = SignedAttestation::from_ssz_default(data)
+                        .map_err(|e| format!("{:?}", e))?;
+                    Ok(PubsubMessage::Attestation(
+                        *subnet_id,
+                        Arc::new(attestation),
+                    ))
+                }
+                GossipKind::BeaconBlock => {
+                    let block = SignedBlockWithAttestation::from_ssz_default(data)
+                        .map_err(|e| format!("{:?}", e))?;
+                    Ok(PubsubMessage::Block(Arc::new(block)))
+                }
+            },
         }
     }
 
@@ -135,11 +137,7 @@ impl PubsubMessage {
 impl std::fmt::Display for PubsubMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PubsubMessage::Block(block) => write!(
-                f,
-                "Block: slot: {}",
-                block.message.block.slot
-            ),
+            PubsubMessage::Block(block) => write!(f, "Block: slot: {}", block.message.block.slot),
             PubsubMessage::AggregateAndProofAttestation(att) => write!(
                 f,
                 "Aggregate and Proof: slot: {}",
@@ -148,8 +146,7 @@ impl std::fmt::Display for PubsubMessage {
             PubsubMessage::Attestation(subnet_id, attestation) => write!(
                 f,
                 "Attestation: subnet_id: {}, attestation_slot: {}",
-                subnet_id,
-                attestation.attestation.data.slot
+                subnet_id, attestation.attestation.data.slot
             ),
         }
     }

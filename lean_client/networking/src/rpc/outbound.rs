@@ -13,20 +13,19 @@ use tokio_util::{
     codec::Framed,
     compat::{Compat, FuturesAsyncReadCompatExt},
 };
-use types::preset::Preset;
 /* Outbound request */
 
 // Combines all the RPC requests into a single enum to implement `UpgradeInfo` and
 // `OutboundUpgrade`
 
 #[derive(Debug, Clone)]
-pub struct OutboundRequestContainer<P: Preset> {
-    pub req: RequestType<P>,
+pub struct OutboundRequestContainer {
+    pub req: RequestType,
     pub fork_context: Arc<ForkContext>,
     pub max_rpc_size: usize,
 }
 
-impl<P: Preset> UpgradeInfo for OutboundRequestContainer<P> {
+impl UpgradeInfo for OutboundRequestContainer {
     type Info = ProtocolId;
     type InfoIter = Vec<Self::Info>;
 
@@ -40,14 +39,13 @@ impl<P: Preset> UpgradeInfo for OutboundRequestContainer<P> {
 
 /* Outbound upgrades */
 
-pub type OutboundFramed<TSocket, P> = Framed<Compat<TSocket>, SSZSnappyOutboundCodec<P>>;
+pub type OutboundFramed<TSocket> = Framed<Compat<TSocket>, SSZSnappyOutboundCodec>;
 
-impl<TSocket, P> OutboundUpgrade<TSocket> for OutboundRequestContainer<P>
+impl<TSocket> OutboundUpgrade<TSocket> for OutboundRequestContainer
 where
-    P: Preset + Send + 'static,
     TSocket: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    type Output = OutboundFramed<TSocket, P>;
+    type Output = OutboundFramed<TSocket>;
     type Error = RPCError;
     type Future = BoxFuture<'static, Result<Self::Output, Self::Error>>;
 

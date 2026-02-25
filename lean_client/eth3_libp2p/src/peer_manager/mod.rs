@@ -148,10 +148,7 @@ pub enum PeerManagerEvent {
 
 impl PeerManager {
     // NOTE: Must be run inside a tokio executor.
-    pub fn new(
-        cfg: config::Config,
-        network_globals: Arc<NetworkGlobals>,
-    ) -> Result<Self> {
+    pub fn new(cfg: config::Config, network_globals: Arc<NetworkGlobals>) -> Result<Self> {
         let config::Config {
             discovery_enabled,
             metrics_enabled,

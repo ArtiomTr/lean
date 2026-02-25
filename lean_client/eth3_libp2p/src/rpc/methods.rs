@@ -6,7 +6,7 @@ use containers::{SignedBlockWithAttestation, Slot, Status};
 use regex::bytes::Regex;
 use serde::Serialize;
 use ssz::{
-    ContiguousList, DynamicList, ReadError, Size, Ssz, SszRead, SszSize, SszWrite, WriteError, H256,
+    ContiguousList, DynamicList, H256, ReadError, Size, Ssz, SszRead, SszSize, SszWrite, WriteError,
 };
 use std::{ops::Deref, sync::Arc};
 use strum::IntoStaticStr;
@@ -154,7 +154,6 @@ pub struct MetaDataV2 {
     pub syncnets: EnrSyncCommitteeBitfield,
 }
 
-
 impl MetaData {
     /// Returns a V1 MetaData response from self.
     pub fn metadata_v1(&self) -> Self {
@@ -261,7 +260,6 @@ impl From<GoodbyeReason> for u64 {
         reason as u64
     }
 }
-
 
 /// Request a number of beacon block bodies from a peer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -431,8 +429,7 @@ impl std::fmt::Display for StatusMessage {
         write!(
             f,
             "Status Message: Finalized: {:?}, Head: {:?}",
-            self.finalized,
-            self.head
+            self.finalized, self.head
         )
     }
 }
@@ -477,5 +474,3 @@ impl std::fmt::Display for GoodbyeReason {
         }
     }
 }
-
-

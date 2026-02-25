@@ -31,8 +31,6 @@ impl Codec for LeanCodec {
     where
         T: AsyncRead + Unpin + Send,
     {
-        io.rea
-
         todo!()
     }
 

@@ -1,7 +1,5 @@
 use crate::discovery::CombinedKey;
-use crate::{
-    Enr, EnrExt, Gossipsub, PeerId, SyncInfo, multiaddr::Multiaddr, types::Subnet,
-};
+use crate::{Enr, EnrExt, Gossipsub, PeerId, SyncInfo, multiaddr::Multiaddr, types::Subnet};
 use helper_functions::misc;
 use itertools::Itertools as _;
 use logging::exception;

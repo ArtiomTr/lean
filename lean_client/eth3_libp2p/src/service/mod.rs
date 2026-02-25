@@ -207,8 +207,7 @@ impl Network {
         )?;
 
         // Construct the metadata
-        let meta_data =
-            utils::load_or_build_metadata(config.network_dir.as_deref());
+        let meta_data = utils::load_or_build_metadata(config.network_dir.as_deref());
         let seq_number = meta_data.seq_number();
         let globals = NetworkGlobals::new(
             chain_config.clone_arc(),
@@ -279,11 +278,7 @@ impl Network {
                 let active_validators = 32_u64;
                 let current_slot = 0;
 
-                score_settings.get_peer_score_params(
-                    active_validators,
-                    &thresholds,
-                    current_slot,
-                )
+                score_settings.get_peer_score_params(active_validators, &thresholds, current_slot)
             };
 
             trace!(?params, "Using peer score params");
@@ -749,7 +744,6 @@ impl Network {
         }
     }
 
-
     /// Returns the scoring parameters for a topic if set.
     pub fn get_topic_params(&self, topic: GossipTopic) -> Option<&TopicScoreParams> {
         self.swarm
@@ -831,7 +825,6 @@ impl Network {
                         );
                     }
                 }
-
 
                 if let PublishError::NoPeersSubscribedToTopic = e {
                     self.gossip_cache.insert(topic, message_data);
@@ -993,7 +986,6 @@ impl Network {
         self.update_metadata_bitfields();
     }
 
-
     /// Attempts to discover new peers for a given subnet. The `min_ttl` gives the time at which we
     /// would like to retain the peers for.
     pub fn discover_subnet_peers(&mut self, subnets_to_discover: Vec<SubnetDiscovery>) {
@@ -1095,7 +1087,6 @@ impl Network {
         // Save the updated metadata to disk
         utils::save_metadata_to_disk(self.network_dir.as_deref(), meta_data);
     }
-
 
     /// Sends a Ping request to the peer.
     fn ping(&mut self, peer_id: PeerId) {
@@ -1363,8 +1354,7 @@ impl Network {
                         // send the requested meta-data
                         let metadata = self.network_globals.local_metadata.read().clone();
                         // The encoder is responsible for sending the negotiated version of the metadata
-                        let response =
-                            RpcResponse::Success(RpcSuccessResponse::MetaData(metadata));
+                        let response = RpcResponse::Success(RpcSuccessResponse::MetaData(metadata));
                         self.send_response(peer_id, inbound_request_id, response);
                         None
                     }
@@ -1393,13 +1383,11 @@ impl Network {
                             request_type,
                         })
                     }
-                    RequestType::BlocksByRoot(_) => {
-                        Some(NetworkEvent::RequestReceived {
-                            peer_id,
-                            inbound_request_id,
-                            request_type,
-                        })
-                    }
+                    RequestType::BlocksByRoot(_) => Some(NetworkEvent::RequestReceived {
+                        peer_id,
+                        inbound_request_id,
+                        request_type,
+                    }),
                 }
             }
             Ok(RPCReceived::Response(id, resp)) => {
@@ -1584,10 +1572,7 @@ impl Network {
         }
     }
 
-    fn parse_swarm_event(
-        &mut self,
-        event: SwarmEvent<BehaviourEvent>,
-    ) -> Option<NetworkEvent> {
+    fn parse_swarm_event(&mut self, event: SwarmEvent<BehaviourEvent>) -> Option<NetworkEvent> {
         match event {
             SwarmEvent::Behaviour(behaviour_event) => match behaviour_event {
                 // Handle sub-behaviour events.

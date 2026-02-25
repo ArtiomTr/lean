@@ -20,9 +20,7 @@ use tracing::{debug, trace};
 use types::config::Config as ChainConfig;
 
 pub(crate) use handler::{HandlerErr, HandlerEvent};
-pub(crate) use methods::{
-    MetaData, MetaDataV1, MetaDataV2, Ping, RpcResponse, RpcSuccessResponse,
-};
+pub(crate) use methods::{MetaData, MetaDataV1, MetaDataV2, Ping, RpcResponse, RpcSuccessResponse};
 pub use protocol::RequestType;
 
 use self::config::{InboundRateLimiterConfig, OutboundRateLimiterConfig};
@@ -32,9 +30,7 @@ use crate::rpc::rate_limiter::RateLimiterItem;
 use crate::rpc::response_limiter::ResponseLimiter;
 pub use handler::SubstreamId;
 pub use methods::{
-    BlocksByRootRequest,
-    GoodbyeReason, ResponseTermination, RpcErrorResponse,
-    StatusMessage,
+    BlocksByRootRequest, GoodbyeReason, ResponseTermination, RpcErrorResponse, StatusMessage,
 };
 pub use protocol::{Protocol, RPCError};
 

@@ -120,8 +120,9 @@ impl ChainService {
                         return ServiceOutput::none();
                     }
 
-                    ServiceOutput::none()
-                        .with_effect(Effect::Network(NetworkEffect::RequestBlocksByRoot(vec![parent_root])))
+                    ServiceOutput::none().with_effect(Effect::Network(
+                        NetworkEffect::RequestBlocksByRoot(vec![parent_root]),
+                    ))
                 } else {
                     warn!(%err, slot, "Failed to process network block");
                     ServiceOutput::none()

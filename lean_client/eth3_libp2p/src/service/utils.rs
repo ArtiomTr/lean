@@ -5,7 +5,6 @@ use crate::types::{
     GossipKind,
 };
 use crate::{GossipTopic, NetworkConfig};
-use types::phase0::primitives::ForkDigest;
 use anyhow::{Result, anyhow};
 use futures::future::Either;
 use gossipsub;
@@ -20,6 +19,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, warn};
+use types::phase0::primitives::ForkDigest;
 
 pub const NETWORK_KEY_FILENAME: &str = "key";
 /// The filename to store our local metadata.
@@ -204,9 +204,7 @@ pub fn strip_peer_id(addr: &mut Multiaddr) {
 }
 
 /// Load metadata from persisted file. Return default metadata if loading fails.
-pub fn load_or_build_metadata(
-    network_dir: Option<&Path>,
-) -> MetaData {
+pub fn load_or_build_metadata(network_dir: Option<&Path>) -> MetaData {
     let mut meta_data = MetaData::V2(MetaDataV2 {
         seq_number: 0,
         attnets: EnrAttestationBitfield::default(),

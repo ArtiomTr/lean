@@ -301,7 +301,9 @@ impl Service for ValidatorService {
                     // Feed into local fork choice and broadcast to the network.
                     output = output
                         .with_chain_message(ChainMessage::ProcessAttestation(signed_att.clone()))
-                        .with_effect(Effect::Network(NetworkEffect::GossipAttestation(signed_att)));
+                        .with_effect(Effect::Network(NetworkEffect::GossipAttestation(
+                            signed_att,
+                        )));
                 }
 
                 output

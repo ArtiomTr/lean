@@ -7,7 +7,10 @@ use std::time::Duration;
 use typenum::Unsigned as _;
 use types::{
     config::Config as ChainConfig,
-    phase0::{consts::AttestationSubnetCount, primitives::{ForkDigest, Slot}},
+    phase0::{
+        consts::AttestationSubnetCount,
+        primitives::{ForkDigest, Slot},
+    },
 };
 
 const MAX_IN_MESH_SCORE: f64 = 10.0;
@@ -102,7 +105,8 @@ impl PeerScoreSettings {
         params.topics = HashMap::new();
 
         let get_hash = |kind: GossipKind| -> TopicHash {
-            let topic: Topic = GossipTopic::new(kind, GossipEncoding::default(), ForkDigest::default()).into();
+            let topic: Topic =
+                GossipTopic::new(kind, GossipEncoding::default(), ForkDigest::default()).into();
             topic.hash()
         };
 
@@ -134,8 +138,9 @@ impl PeerScoreSettings {
         current_slot: Slot,
     ) -> (TopicScoreParams, TopicScoreParams, TopicScoreParams) {
         // Expected attestations per slot per subnet
-        let attestations_per_subnet_per_slot =
-            active_validators as f64 / self.attestation_subnet_count as f64 / SLOTS_PER_EPOCH as f64;
+        let attestations_per_subnet_per_slot = active_validators as f64
+            / self.attestation_subnet_count as f64
+            / SLOTS_PER_EPOCH as f64;
 
         // Expected aggregate proofs per slot
         let aggregates_per_slot = active_validators as f64 / SLOTS_PER_EPOCH as f64;
