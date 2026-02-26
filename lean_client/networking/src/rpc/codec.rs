@@ -3,14 +3,13 @@ use crate::rpc::methods::*;
 use crate::rpc::protocol::{
     ERROR_TYPE_MAX, ERROR_TYPE_MIN, Encoding, ProtocolId, RPCError, SupportedProtocol,
 };
-use crate::types::ForkContext;
 use containers::SignedBlockWithAttestation;
 // use helper_functions::misc;
 use libp2p::bytes::BufMut;
 use libp2p::bytes::BytesMut;
 use snap::read::FrameDecoder;
 use snap::write::FrameEncoder;
-use ssz::{ContiguousList, DynamicList, H256, SszRead as _, SszReadDefault, SszWrite as _};
+use ssz::{ContiguousList, DynamicList, SszRead as _, SszReadDefault, SszWrite as _};
 use std::io::Cursor;
 use std::io::ErrorKind;
 use std::io::{Read, Write};
@@ -29,15 +28,10 @@ pub struct SSZSnappyInboundCodec {
     len: Option<usize>,
     /// Maximum bytes that can be sent in one req/resp chunked responses.
     max_packet_size: usize,
-    fork_context: Arc<ForkContext>,
 }
 
 impl SSZSnappyInboundCodec {
-    pub fn new(
-        protocol: ProtocolId,
-        max_packet_size: usize,
-        fork_context: Arc<ForkContext>,
-    ) -> Self {
+    pub fn new(protocol: ProtocolId, max_packet_size: usize) -> Self {
         let uvi_codec = Uvi::default();
         // this encoding only applies to ssz_snappy.
         debug_assert_eq!(protocol.encoding, Encoding::SSZSnappy);
@@ -46,7 +40,6 @@ impl SSZSnappyInboundCodec {
             inner: uvi_codec,
             protocol,
             len: None,
-            fork_context,
             max_packet_size,
         }
     }
@@ -164,10 +157,7 @@ impl Decoder for SSZSnappyInboundCodec {
                 let n = reader.get_ref().get_ref().position();
                 self.len = None;
                 let _read_bytes = src.split_to(n as usize);
-                handle_rpc_request(
-                    self.protocol.versioned_protocol,
-                    &decoded_buffer,
-                )
+                handle_rpc_request(self.protocol.versioned_protocol, &decoded_buffer)
             }
             Err(e) => handle_error(e, reader.get_ref().get_ref().position(), max_compressed_len),
         }
@@ -181,17 +171,12 @@ pub struct SSZSnappyOutboundCodec {
     protocol: ProtocolId,
     /// Maximum bytes that can be sent in one req/resp chunked responses.
     max_packet_size: usize,
-    fork_context: Arc<ForkContext>,
     /// Keeps track of the current response code for a chunk.
     current_response_code: Option<u8>,
 }
 
 impl SSZSnappyOutboundCodec {
-    pub fn new(
-        protocol: ProtocolId,
-        max_packet_size: usize,
-        fork_context: Arc<ForkContext>,
-    ) -> Self {
+    pub fn new(protocol: ProtocolId, max_packet_size: usize) -> Self {
         let uvi_codec = Uvi::default();
         // this encoding only applies to ssz_snappy.
         debug_assert_eq!(protocol.encoding, Encoding::SSZSnappy);
@@ -201,8 +186,6 @@ impl SSZSnappyOutboundCodec {
             protocol,
             max_packet_size,
             len: None,
-            phase: None,
-            fork_context,
             current_response_code: None,
         }
     }
@@ -212,25 +195,25 @@ impl SSZSnappyOutboundCodec {
         &mut self,
         src: &mut BytesMut,
     ) -> Result<Option<RpcSuccessResponse>, RPCError> {
-        // Read the context bytes if required
-        if self.protocol.has_context_bytes() && self.phase.is_none() {
-            if src.len() >= CONTEXT_BYTES_LEN {
-                let context_bytes = ForkDigest::from_slice(&src.split_to(CONTEXT_BYTES_LEN));
-                self.phase = Some(context_bytes_to_phase(
-                    context_bytes,
-                    self.fork_context.clone(),
-                )?);
-            } else {
-                return Ok(None);
-            }
-        }
+        // // Read the context bytes if required
+        // if self.protocol.has_context_bytes() && self.phase.is_none() {
+        //     if src.len() >= CONTEXT_BYTES_LEN {
+        //         let context_bytes = ForkDigest::from_slice(&src.split_to(CONTEXT_BYTES_LEN));
+        //         self.phase = Some(context_bytes_to_phase(
+        //             context_bytes,
+        //             self.fork_context.clone(),
+        //         )?);
+        //     } else {
+        //         return Ok(None);
+        //     }
+        // }
         let Some(length) = handle_length(&mut self.inner, &mut self.len, src)? else {
             return Ok(None);
         };
 
         // Should not attempt to decode rpc chunks with `length > max_packet_size` or not within bounds of
         // packet size for ssz container corresponding to `self.protocol`.
-        let ssz_limits = self.protocol.rpc_response_limits(&self.fork_context);
+        let ssz_limits = self.protocol.rpc_response_limits();
         if ssz_limits.is_out_of_bounds(length, self.max_packet_size) {
             return Err(RPCError::InvalidData(format!(
                 "RPC response length is out of bounds, length {}, max {}, min {}, max_packet_size: {}",
@@ -255,7 +238,7 @@ impl SSZSnappyOutboundCodec {
                 // decode an ssz object at this point.
                 let phase = self.phase;
                 self.phase = None;
-                handle_rpc_response(self.protocol.versioned_protocol, &decoded_buffer, phase)
+                handle_rpc_response(self.protocol.versioned_protocol, &decoded_buffer)
             }
             Err(e) => handle_error(e, reader.get_ref().get_ref().position(), max_compressed_len),
         }
@@ -490,8 +473,8 @@ fn handle_rpc_response(
             StatusMessageV1::from_ssz_default(decoded_buffer)?,
         )))),
         SupportedProtocol::BlocksByRootV1 => Ok(Some(RpcSuccessResponse::BlocksByRoot(Arc::new(
-            SignedBlockWithAttestation::from_ssz_default(decoded_buffer)?),
-        ))),
+            SignedBlockWithAttestation::from_ssz_default(decoded_buffer)?,
+        )))),
     }
 }
 

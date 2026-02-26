@@ -2,7 +2,6 @@
 
 use super::config::RateLimiterConfig;
 use crate::rpc::Protocol;
-use crate::types::ForkContext;
 use fnv::FnvHashMap;
 use libp2p::PeerId;
 use serde::{Deserialize, Serialize};
@@ -113,7 +112,6 @@ pub struct RPCRateLimiter {
     lc_finality_update_rl: Limiter<PeerId>,
     /// LightClientUpdatesByRange rate limiter.
     lc_updates_by_range_rl: Limiter<PeerId>,
-    fork_context: Arc<ForkContext>,
 }
 
 /// Error type for non conformant requests
@@ -181,7 +179,7 @@ impl RPCRateLimiterBuilder {
         self
     }
 
-    pub fn build(self, fork_context: Arc<ForkContext>) -> Result<RPCRateLimiter, &'static str> {
+    pub fn build(self) -> Result<RPCRateLimiter, &'static str> {
         // get our quotas
         let ping_quota = self.ping_quota.ok_or("Ping quota not specified")?;
         let metadata_quota = self.metadata_quota.ok_or("MetaData quota not specified")?;
@@ -260,7 +258,6 @@ impl RPCRateLimiterBuilder {
             lc_finality_update_rl,
             lc_updates_by_range_rl,
             init_time: Instant::now(),
-            fork_context,
         })
     }
 }
@@ -292,10 +289,7 @@ impl RateLimiterItem for (super::RpcResponse, Protocol) {
 }
 
 impl RPCRateLimiter {
-    pub fn new_with_config(
-        config: RateLimiterConfig,
-        fork_context: Arc<ForkContext>,
-    ) -> Result<Self, &'static str> {
+    pub fn new_with_config(config: RateLimiterConfig) -> Result<Self, &'static str> {
         // Destructure to make sure every configuration value is used.
         let RateLimiterConfig {
             ping_quota,
@@ -338,7 +332,7 @@ impl RPCRateLimiter {
                 Protocol::LightClientUpdatesByRange,
                 light_client_updates_by_range_quota,
             )
-            .build(fork_context)
+            .build()
     }
 
     /// Get a builder instance.
@@ -395,7 +389,6 @@ impl RPCRateLimiter {
             lc_optimistic_update_rl,
             lc_finality_update_rl,
             lc_updates_by_range_rl,
-            fork_context: _,
         } = self;
 
         goodbye_rl.prune(time_since_start);

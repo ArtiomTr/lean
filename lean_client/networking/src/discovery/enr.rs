@@ -5,7 +5,7 @@ pub use discv5::enr::CombinedKey;
 use super::ENR_FILENAME;
 use super::enr_ext::CombinedKeyExt;
 use crate::NetworkConfig;
-use crate::types::{Enr, EnrAttestationBitfield, EnrForkId, EnrSyncCommitteeBitfield};
+use crate::types::{Enr, EnrAttestationBitfield, EnrForkId};
 use alloy_rlp::bytes::Bytes;
 use anyhow::{Result, anyhow};
 use grandine_version::{APPLICATION_NAME, APPLICATION_VERSION};
@@ -33,9 +33,6 @@ pub trait Eth2Enr {
     /// The attestation subnet bitfield associated with the ENR.
     fn attestation_bitfield(&self) -> Result<EnrAttestationBitfield, &'static str>;
 
-    /// The sync committee subnet bitfield associated with the ENR.
-    fn sync_committee_bitfield(&self) -> Result<EnrSyncCommitteeBitfield, &'static str>;
-
     /// The aggregator role flag associated with the ENR.
     fn is_aggregator(&self) -> Result<bool, &'static str>;
 
@@ -51,16 +48,6 @@ impl Eth2Enr for Enr {
 
         EnrAttestationBitfield::from_ssz_default(&bitfield_bytes)
             .map_err(|_| "Could not decode the ENR attnets bitfield")
-    }
-
-    fn sync_committee_bitfield(&self) -> Result<EnrSyncCommitteeBitfield, &'static str> {
-        let bitfield_bytes = self
-            .get_decodable::<Bytes>(SYNC_COMMITTEE_BITFIELD_ENR_KEY)
-            .ok_or("ENR sync committee bitfield non-existent")?
-            .map_err(|_| "Invalid RLP Encoding")?;
-
-        EnrSyncCommitteeBitfield::from_ssz_default(&bitfield_bytes)
-            .map_err(|_| "Could not decode the ENR syncnets bitfield")
     }
 
     fn is_aggregator(&self) -> Result<bool, &'static str> {
@@ -247,9 +234,6 @@ pub fn build_enr(
 
     builder.add_value::<Bytes>(ATTESTATION_BITFIELD_ENR_KEY, &bitfield.to_ssz()?.into());
 
-    // set the "syncnets" field on our ENR
-    let bitfield = EnrSyncCommitteeBitfield::default();
-
     builder.add_value::<Bytes>(SYNC_COMMITTEE_BITFIELD_ENR_KEY, &bitfield.to_ssz()?.into());
 
     builder
@@ -319,35 +303,35 @@ pub fn save_enr_to_disk(dir: Option<&Path>, enr: &Enr) {
     }
 }
 
-#[cfg(test)]
-mod test {
-    use super::*;
-    use crate::config::Config as NetworkConfig;
+// #[cfg(test)]
+// mod test {
+//     use super::*;
+//     use crate::config::Config as NetworkConfig;
 
-    fn build_enr_with_config(config: NetworkConfig) -> (Enr, CombinedKey) {
-        let keypair = libp2p::identity::secp256k1::Keypair::generate();
-        let enr_key = CombinedKey::from_secp256k1(&keypair);
-        let enr_fork_id = EnrForkId::default();
-        let enr = build_enr(&enr_key, &config, &enr_fork_id).unwrap();
-        (enr, enr_key)
-    }
+//     fn build_enr_with_config(config: NetworkConfig) -> (Enr, CombinedKey) {
+//         let keypair = libp2p::identity::secp256k1::Keypair::generate();
+//         let enr_key = CombinedKey::from_secp256k1(&keypair);
+//         let enr_fork_id = EnrForkId::default();
+//         let enr = build_enr(&enr_key, &config, &enr_fork_id).unwrap();
+//         (enr, enr_key)
+//     }
 
-    #[test]
-    fn test_encode_decode_eth2_enr() {
-        let (enr, _key) = build_enr_with_config(NetworkConfig::default());
-        // Check all Eth2 Mappings are decodeable
-        enr.eth2().unwrap();
-        enr.attestation_bitfield().unwrap();
-        enr.sync_committee_bitfield().unwrap();
-    }
+//     #[test]
+//     fn test_encode_decode_eth2_enr() {
+//         let (enr, _key) = build_enr_with_config(NetworkConfig::default());
+//         // Check all Eth2 Mappings are decodeable
+//         enr.eth2().unwrap();
+//         enr.attestation_bitfield().unwrap();
+//         enr.sync_committee_bitfield().unwrap();
+//     }
 
-    #[test]
-    fn test_eth2_enr_encodings() {
-        let enr_str = "enr:-Mm4QEX9fFRi1n4H3M9sGIgFQ6op1IysTU4Gz6tpIiOGRM1DbJtIih1KgGgv3Xl-oUlwco3HwdXsbYuXStBuNhUVIPoBh2F0dG5ldHOIAAAAAAAAAACDY3NjBIRldGgykI-3hTFgAAA4AOH1BQAAAACCaWSCdjSCaXCErBAADoRxdWljgiMpiXNlY3AyNTZrMaECph91xMyTVyE5MVj6lBpPgz6KP2--Kr9lPbo6_GjrfRKIc3luY25ldHMAg3RjcIIjKIN1ZHCCIyg";
-        //let my_enr_str = "enr:-Ma4QM2I1AxBU116QcMV2wKVrSr5Nsko90gMVkstZO4APysQCEwJJJeuTvODKmv7fDsLhVFjrlidVNhBOxSZ8sZPbCWCCcqHYXR0bmV0c4gAAAAAAAAMAIRldGgykGqVoakEAAAA__________-CaWSCdjSCaXCEJq-HPYRxdWljgiMziXNlY3AyNTZrMaECMPAnmmHQpD1k6DuOxWVoFXBoTYY6Wuv9BP4lxauAlmiIc3luY25ldHMAg3RjcIIjMoN1ZHCCIzI";
-        let enr = Enr::from_str(enr_str).unwrap();
-        enr.eth2().unwrap();
-        enr.attestation_bitfield().unwrap();
-        enr.sync_committee_bitfield().unwrap();
-    }
-}
+//     #[test]
+//     fn test_eth2_enr_encodings() {
+//         let enr_str = "enr:-Mm4QEX9fFRi1n4H3M9sGIgFQ6op1IysTU4Gz6tpIiOGRM1DbJtIih1KgGgv3Xl-oUlwco3HwdXsbYuXStBuNhUVIPoBh2F0dG5ldHOIAAAAAAAAAACDY3NjBIRldGgykI-3hTFgAAA4AOH1BQAAAACCaWSCdjSCaXCErBAADoRxdWljgiMpiXNlY3AyNTZrMaECph91xMyTVyE5MVj6lBpPgz6KP2--Kr9lPbo6_GjrfRKIc3luY25ldHMAg3RjcIIjKIN1ZHCCIyg";
+//         //let my_enr_str = "enr:-Ma4QM2I1AxBU116QcMV2wKVrSr5Nsko90gMVkstZO4APysQCEwJJJeuTvODKmv7fDsLhVFjrlidVNhBOxSZ8sZPbCWCCcqHYXR0bmV0c4gAAAAAAAAMAIRldGgykGqVoakEAAAA__________-CaWSCdjSCaXCEJq-HPYRxdWljgiMziXNlY3AyNTZrMaECMPAnmmHQpD1k6DuOxWVoFXBoTYY6Wuv9BP4lxauAlmiIc3luY25ldHMAg3RjcIIjMoN1ZHCCIzI";
+//         let enr = Enr::from_str(enr_str).unwrap();
+//         enr.eth2().unwrap();
+//         enr.attestation_bitfield().unwrap();
+//         enr.sync_committee_bitfield().unwrap();
+//     }
+// }

@@ -1,10 +1,12 @@
 mod behaviour;
 mod common;
 mod config;
+mod defaults;
 mod discovery;
 mod listen_addr;
-mod reqresp;
+mod peer_manager;
 mod rpc;
+mod service;
 mod types;
 
 use std::str::FromStr;
@@ -12,9 +14,12 @@ use std::str::FromStr;
 use libp2p::swarm::DialError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
-pub use crate::types::{Enr, NetworkGlobals, Subnet, SubnetDiscovery};
+pub use crate::discovery::{CombinedKeyExt, EnrExt, Eth2Enr};
+pub use crate::types::{Enr, GossipTopic, NetworkGlobals, Subnet, SubnetDiscovery};
 pub use config::Config as NetworkConfig;
-pub use libp2p::{Multiaddr, PeerId};
+pub use libp2p::{Multiaddr, PeerId, gossipsub::TopicHash};
+pub use peer_manager::{SyncInfo, peerdb::client::Client};
+pub use service::{Gossipsub, NetworkEvent};
 
 /// Wrapper over a libp2p `PeerId` which implements `Serialize` and `Deserialize`
 #[derive(Clone, Debug)]

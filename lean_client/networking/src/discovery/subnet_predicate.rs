@@ -1,7 +1,7 @@
 //! The subnet predicate used for searching for a particular subnet.
 use tracing::trace;
 
-use crate::{Enr, Subnet};
+use crate::{Enr, EnrExt as _, Eth2Enr as _, Subnet};
 
 /// Returns the predicate for a given subnet.
 pub fn subnet_predicate(subnets: Vec<Subnet>) -> impl Fn(&Enr) -> bool + Send {
@@ -10,16 +10,10 @@ pub fn subnet_predicate(subnets: Vec<Subnet>) -> impl Fn(&Enr) -> bool + Send {
             return false;
         };
 
-        // Pre-fork/fork-boundary enrs may not contain a syncnets field.
-        // Don't return early here.
-        let sync_committee_bitfield = enr.sync_committee_bitfield();
-
         let predicate = subnets.iter().any(|subnet| match subnet {
             Subnet::Attestation(subnet_id) => attestation_bitfield
                 .get(*subnet_id as usize)
                 .unwrap_or_default(),
-            Subnet::SyncCommittee(subnet_id) => sync_committee_bitfield
-                .is_ok_and(|bitfield| bitfield.get(*subnet_id as usize).unwrap_or_default()),
         });
 
         if !predicate {

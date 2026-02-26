@@ -20,7 +20,7 @@ pub type AttestationSignatures = PersistentList<AggregatedSignatureProof, Valida
 /// This type combines the participant bitfield with the proof bytes,
 /// matches Python's `AggregatedSignatureProof` container structure.
 /// Used in `aggregated_payloads` to track which validators are covered by each proof.
-#[derive(Clone, Debug, Ssz, Serialize, Deserialize)]
+#[derive(Clone, Debug, Ssz, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AggregatedSignatureProof {
     /// Bitfield indicating which validators' signatures are included.
@@ -60,7 +60,7 @@ impl AggregatedSignatureProof {
 
 /// Bitlist representing validator participation in an attestation.
 /// Limit is VALIDATOR_REGISTRY_LIMIT (4096).
-#[derive(Clone, Debug, Ssz, Serialize, Deserialize)]
+#[derive(Clone, Debug, Ssz, Serialize, Deserialize, PartialEq)]
 pub struct AggregationBits(
     #[serde(with = "crate::serde_helpers::bitlist")] pub BitList<ValidatorRegistryLimit>,
 );
@@ -162,7 +162,7 @@ pub struct Attestation {
 }
 
 /// Validator attestation bundled with its signature.
-#[derive(Clone, Debug, Ssz)]
+#[derive(Clone, Debug, Ssz, PartialEq)]
 pub struct SignedAttestation {
     pub validator_id: u64,
     pub message: AttestationData,
@@ -170,7 +170,7 @@ pub struct SignedAttestation {
 }
 
 /// Aggregated attestation consisting of participation bits and message.
-#[derive(Clone, Debug, Ssz, Serialize, Deserialize)]
+#[derive(Clone, Debug, Ssz, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AggregatedAttestation {
     /// Bitfield indicating which validators participated in the aggregation.
@@ -222,7 +222,7 @@ impl AggregatedAttestation {
 }
 
 /// Signed aggregated attestation with aggregated proof.
-#[derive(Clone, Debug, Ssz)]
+#[derive(Clone, Debug, Ssz, PartialEq)]
 pub struct SignedAggregatedAttestation {
     /// The attestation data that was signed.
     pub data: AttestationData,

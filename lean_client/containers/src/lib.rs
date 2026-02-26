@@ -20,7 +20,7 @@ pub use block::{
 };
 pub use checkpoint::Checkpoint;
 pub use config::{Config, GenesisConfig};
-pub use primitives::{ForkDigest, SubnetId, Version};
+pub use primitives::{AttestationSubnetCount, ForkDigest, SubnetId, Version};
 pub use slot::Slot;
 pub use state::{
     HistoricalBlockHashes, JustificationRoots, JustificationValidators, JustifiedSlots, State,

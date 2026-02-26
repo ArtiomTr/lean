@@ -12,7 +12,7 @@ use crate::attestation::{AggregatedAttestations, AttestationSignatures};
 /// Attestations are stored WITHOUT signatures. Signatures are aggregated
 /// separately in BlockSignatures to match the spec architecture.
 // todo(containers): default implementation doesn't make sense here.
-#[derive(Clone, Debug, Ssz, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Ssz, Serialize, Deserialize, Default, PartialEq)]
 pub struct BlockBody {
     #[serde(with = "crate::serde_helpers::aggregated_attestations")]
     pub attestations: AggregatedAttestations,
@@ -28,7 +28,7 @@ pub struct BlockHeader {
     pub body_root: H256,
 }
 
-#[derive(Clone, Debug, Ssz, Serialize, Deserialize)]
+#[derive(Clone, Debug, Ssz, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Block {
     pub slot: Slot,
@@ -39,7 +39,7 @@ pub struct Block {
 }
 
 /// Bundle containing a block and the proposer's attestation.
-#[derive(Clone, Debug, Ssz, Serialize, Deserialize)]
+#[derive(Clone, Debug, Ssz, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockWithAttestation {
     /// The proposed block message.
@@ -49,7 +49,7 @@ pub struct BlockWithAttestation {
 }
 
 // todo(containers): default implementation doesn't make sense here
-#[derive(Debug, Clone, Ssz, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Ssz, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockSignatures {
     #[serde(with = "crate::serde_helpers::attestation_signatures")]
@@ -58,7 +58,7 @@ pub struct BlockSignatures {
 }
 
 /// Envelope carrying a block, an attestation from proposer, and aggregated signatures.
-#[derive(Clone, Debug, Ssz, Serialize, Deserialize)]
+#[derive(Clone, Debug, Ssz, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SignedBlockWithAttestation {
     /// The block plus an attestation from proposer being signed.

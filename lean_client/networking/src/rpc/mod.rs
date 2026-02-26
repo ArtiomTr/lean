@@ -19,8 +19,6 @@ use std::task::{Context, Poll};
 use std_ext::ArcExt as _;
 use tracing::{debug, trace};
 
-use crate::types::ForkContext;
-
 pub(crate) use handler::{HandlerErr, HandlerEvent};
 pub(crate) use methods::{RpcResponse, RpcSuccessResponse};
 pub use protocol::RequestType;
@@ -155,7 +153,6 @@ pub struct RPC<Id: ReqId> {
     active_inbound_requests: HashMap<InboundRequestId, ActiveInboundRequest>,
     /// Queue of events to be processed.
     events: Vec<BehaviourAction<Id>>,
-    fork_context: Arc<ForkContext>,
     enable_light_client_server: bool,
     /// A sequential counter indicating when data gets modified.
     seq_number: u64,
@@ -163,7 +160,6 @@ pub struct RPC<Id: ReqId> {
 
 impl<Id: ReqId> RPC<Id> {
     pub fn new(
-        fork_context: Arc<ForkContext>,
         enable_light_client_server: bool,
         inbound_rate_limiter_config: Option<InboundRateLimiterConfig>,
         outbound_rate_limiter_config: Option<OutboundRateLimiterConfig>,
@@ -171,12 +167,12 @@ impl<Id: ReqId> RPC<Id> {
     ) -> Self {
         let response_limiter = inbound_rate_limiter_config.map(|config| {
             debug!(?config, "Using response rate limiting params");
-            ResponseLimiter::new(config, fork_context.clone())
+            ResponseLimiter::new(config)
                 .expect("Inbound limiter configuration parameters are valid")
         });
 
         let outbound_request_limiter: SelfRateLimiter<Id> =
-            SelfRateLimiter::new(outbound_rate_limiter_config, fork_context.clone())
+            SelfRateLimiter::new(outbound_rate_limiter_config)
                 .expect("Outbound limiter configuration parameters are valid");
 
         RPC {
@@ -184,7 +180,6 @@ impl<Id: ReqId> RPC<Id> {
             outbound_request_limiter,
             active_inbound_requests: HashMap::new(),
             events: Vec::new(),
-            fork_context,
             enable_light_client_server,
             seq_number,
         }
@@ -310,13 +305,12 @@ impl<Id: ReqId> NetworkBehaviour for RPC<Id> {
     ) -> Result<libp2p::swarm::THandler<Self>, libp2p::swarm::ConnectionDenied> {
         let protocol = SubstreamProtocol::new(
             RPCProtocol {
-                fork_context: self.fork_context.clone(),
                 max_rpc_size: self.chain_config.max_payload_size,
             },
             (),
         );
 
-        let handler = RPCHandler::new(protocol, self.fork_context.clone(), peer_id, connection_id);
+        let handler = RPCHandler::new(protocol, peer_id, connection_id);
 
         Ok(handler)
     }
@@ -331,13 +325,12 @@ impl<Id: ReqId> NetworkBehaviour for RPC<Id> {
     ) -> Result<libp2p::swarm::THandler<Self>, libp2p::swarm::ConnectionDenied> {
         let protocol = SubstreamProtocol::new(
             RPCProtocol {
-                fork_context: self.fork_context.clone(),
                 max_rpc_size: self.chain_config.max_payload_size,
             },
             (),
         );
 
-        let handler = RPCHandler::new(protocol, self.fork_context.clone(), peer_id, connection_id);
+        let handler = RPCHandler::new(protocol, peer_id, connection_id);
 
         Ok(handler)
     }

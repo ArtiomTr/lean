@@ -18,8 +18,6 @@ use smallvec::SmallVec;
 use tokio_util::time::DelayQueue;
 use tracing::{debug, error};
 
-use crate::types::ForkContext;
-
 /// A request that was rate limited or waiting on rate limited requests for the same peer and
 /// protocol.
 struct QueuedRequest<Id: ReqId> {
@@ -58,13 +56,10 @@ pub enum Error {
 
 impl<Id: ReqId> SelfRateLimiter<Id> {
     /// Creates a new [`SelfRateLimiter`] based on configuration values.
-    pub fn new(
-        config: Option<OutboundRateLimiterConfig>,
-        fork_context: Arc<ForkContext>,
-    ) -> Result<Self, &'static str> {
+    pub fn new(config: Option<OutboundRateLimiterConfig>) -> Result<Self, &'static str> {
         debug!(?config, "Using self rate limiting params");
         let rate_limiter = if let Some(c) = config {
-            Some(RateLimiter::new_with_config(c.0, fork_context)?)
+            Some(RateLimiter::new_with_config(c.0)?)
         } else {
             None
         };

@@ -504,32 +504,6 @@ impl Discovery {
                     .enr_insert::<Bytes>(ATTESTATION_BITFIELD_ENR_KEY, &bitfield_ssz.into())
                     .map_err(|e| anyhow!("{:?}", e))?;
             }
-            Subnet::SyncCommittee(id) => {
-                let id = id as usize;
-
-                let mut current_bitfield =
-                    local_enr.sync_committee_bitfield().map_err(Error::msg)?;
-
-                // The bitfield is already set to required value
-                if current_bitfield
-                    .get(id)
-                    .ok_or_else(|| anyhow!("subnet ID out of bounds"))?
-                    == value
-                {
-                    return Ok(());
-                }
-
-                // set the subnet bitfield in the ENR
-                current_bitfield.set(id, value);
-
-                // insert the bitfield into the ENR record
-                let bitfield_ssz = current_bitfield.to_ssz()?;
-                self.discv5
-                    .enr_insert::<Bytes>(SYNC_COMMITTEE_BITFIELD_ENR_KEY, &bitfield_ssz.into())
-                    .map_err(|e| anyhow!("{:?}", e))?;
-            }
-            // Data column subnets are computed from node ID. No subnet bitfield in the ENR.
-            Subnet::DataColumn(_) => return Ok(()),
         }
 
         // replace the global version

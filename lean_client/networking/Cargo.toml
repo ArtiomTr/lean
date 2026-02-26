@@ -31,3 +31,9 @@ try_from_iterator = { workspace = true }
 std_ext = { workspace = true }
 tokio-util = { workspace = true }
 smallvec = { workspace = true }
+sha2 = { workspace = true }
+itertools = { workspace = true }
+local-ip-address = { workspace = true }
+delay_map = { workspace = true }
+rand = { workspace = true }
+libp2p-mplex = { workspace = true }

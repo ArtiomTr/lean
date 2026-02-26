@@ -12,13 +12,12 @@ use crate::defaults::{
 use crate::listen_addr::{ListenAddr, ListenAddress};
 use crate::peer_manager::config::DEFAULT_TARGET_PEERS;
 use crate::rpc::config::{InboundRateLimiterConfig, OutboundRateLimiterConfig};
-use crate::types::{ForkContext, GossipKind};
+use crate::types::GossipKind;
 use crate::{Enr, PeerIdSerialized};
 use libp2p::{Multiaddr, gossipsub};
 use local_ip_address::local_ipv6;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use types::nonstandard::Phase;
 
 pub const DEFAULT_IPV4_ADDRESS: Ipv4Addr = Ipv4Addr::UNSPECIFIED;
 pub const DEFAULT_TCP_PORT: u16 = 9000u16;
@@ -452,52 +451,27 @@ impl From<u8> for NetworkLoad {
 /// Return a specific `GossipsubConfig` where the `message_id_fn` depends on the current fork.
 pub fn gossipsub_config(
     network_load: u8,
-    fork_context: Arc<ForkContext>,
     gossipsub_config_params: GossipsubConfigParams,
     slot_duration: Duration,
     slots_per_epoch: u64,
     idontwant_message_size_threshold: usize,
 ) -> gossipsub::Config {
-    fn prefix(
-        prefix: [u8; 4],
-        message: &gossipsub::Message,
-        fork_context: Arc<ForkContext>,
-    ) -> Vec<u8> {
+    fn prefix(prefix: [u8; 4], message: &gossipsub::Message) -> Vec<u8> {
         let topic_bytes = message.topic.as_str().as_bytes();
-        match fork_context.current_fork_name() {
-            // according to: https://github.com/ethereum/consensus-specs/blob/dev/specs/merge/p2p-interface.md#the-gossip-domain-gossipsub
-            // the derivation of the message-id remains the same in the merge
-            Phase::Altair
-            | Phase::Bellatrix
-            | Phase::Capella
-            | Phase::Deneb
-            | Phase::Electra
-            | Phase::Fulu
-            | Phase::Gloas => {
-                let topic_len_bytes = topic_bytes.len().to_le_bytes();
-                let mut vec = Vec::with_capacity(
-                    prefix.len() + topic_len_bytes.len() + topic_bytes.len() + message.data.len(),
-                );
-                vec.extend_from_slice(&prefix);
-                vec.extend_from_slice(&topic_len_bytes);
-                vec.extend_from_slice(topic_bytes);
-                vec.extend_from_slice(&message.data);
-                vec
-            }
-            Phase::Phase0 => {
-                let mut vec = Vec::with_capacity(prefix.len() + message.data.len());
-                vec.extend_from_slice(&prefix);
-                vec.extend_from_slice(&message.data);
-                vec
-            }
-        }
+        let topic_len_bytes = topic_bytes.len().to_le_bytes();
+        let mut vec = Vec::with_capacity(
+            prefix.len() + topic_len_bytes.len() + topic_bytes.len() + message.data.len(),
+        );
+        vec.extend_from_slice(&prefix);
+        vec.extend_from_slice(&topic_len_bytes);
+        vec.extend_from_slice(topic_bytes);
+        vec.extend_from_slice(&message.data);
+        vec
     }
     let message_domain_valid_snappy = gossipsub_config_params.message_domain_valid_snappy;
     let gossip_message_id = move |message: &gossipsub::Message| {
         gossipsub::MessageId::from(
-            &Sha256::digest(
-                prefix(message_domain_valid_snappy, message, fork_context.clone()).as_slice(),
-            )[..20],
+            &Sha256::digest(prefix(message_domain_valid_snappy, message).as_slice())[..20],
         )
     };
 

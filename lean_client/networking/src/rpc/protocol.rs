@@ -1,6 +1,5 @@
 use super::methods::*;
 use crate::rpc::codec::SSZSnappyInboundCodec;
-use crate::types::ForkContext;
 use futures::future::BoxFuture;
 use futures::prelude::{AsyncRead, AsyncWrite};
 use futures::{FutureExt, StreamExt};
@@ -107,7 +106,6 @@ impl fmt::Display for Encoding {
 
 #[derive(Debug, Clone)]
 pub struct RPCProtocol {
-    pub fork_context: Arc<ForkContext>,
     pub max_rpc_size: usize,
 }
 
@@ -181,7 +179,7 @@ impl ProtocolId {
     }
 
     /// Returns min and max size for messages of given protocol id responses.
-    pub fn rpc_response_limits(&self, fork_context: &ForkContext) -> RpcLimits {
+    pub fn rpc_response_limits(&self) -> RpcLimits {
         match self.versioned_protocol.protocol() {
             Protocol::Status => RpcLimits::fixed(StatusMessageV1::SIZE.get()),
             Protocol::BlocksByRoot => todo!(),

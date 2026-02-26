@@ -1,5 +1,5 @@
+use containers::Slot;
 use serde::{Deserialize, Serialize};
-use types::phase0::primitives::Slot;
 
 /// The current state of the node.
 #[derive(Clone, Debug, Serialize, Deserialize)]

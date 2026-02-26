@@ -1,7 +1,7 @@
 //! Available RPC methods types and ids.
 use std::fmt::{self, Display};
 
-use crate::types::{EnrAttestationBitfield, EnrSyncCommitteeBitfield};
+use crate::types::EnrAttestationBitfield;
 use anyhow::Result;
 use containers::{Checkpoint, SignedBlockWithAttestation};
 use regex::bytes::Regex;

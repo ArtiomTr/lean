@@ -26,7 +26,7 @@ type AggregatedSignatureSizeLimit = U1048576;
 ///
 /// todo(xmss): deriving Ssz not particularly good there, as this won't validate
 /// if it actually has valid proof structure, so `.as_lean()` method may panic.
-#[derive(Debug, Clone, Ssz)]
+#[derive(Debug, Clone, Ssz, PartialEq)]
 pub struct AggregatedSignature(ByteList<AggregatedSignatureSizeLimit>);
 
 fn setup_prover() {

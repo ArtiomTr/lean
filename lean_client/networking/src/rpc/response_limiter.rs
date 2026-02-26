@@ -4,7 +4,6 @@ use crate::rpc::config::InboundRateLimiterConfig;
 use crate::rpc::rate_limiter::{RPCRateLimiter, RateLimitedErr};
 use crate::rpc::self_limiter::timestamp_now;
 use crate::rpc::{Protocol, RpcResponse, SubstreamId};
-use crate::types::ForkContext;
 use futures::FutureExt;
 use libp2p::swarm::ConnectionId;
 use std::collections::hash_map::Entry;
@@ -38,12 +37,9 @@ pub(super) struct ResponseLimiter {
 
 impl ResponseLimiter {
     /// Creates a new [`ResponseLimiter`] based on configuration values.
-    pub fn new(
-        config: InboundRateLimiterConfig,
-        fork_context: Arc<ForkContext>,
-    ) -> Result<Self, &'static str> {
+    pub fn new(config: InboundRateLimiterConfig) -> Result<Self, &'static str> {
         Ok(ResponseLimiter {
-            limiter: RPCRateLimiter::new_with_config(config.0, fork_context)?,
+            limiter: RPCRateLimiter::new_with_config(config.0)?,
             delayed_responses: HashMap::new(),
             next_response: DelayQueue::new(),
         })

@@ -126,22 +126,9 @@ impl GossipTopic {
     pub fn decode(topic: &str) -> Result<Self, String> {
         let topic_parts: Vec<&str> = topic.split('/').collect();
         if topic_parts.len() == 5 && topic_parts[1] == TOPIC_PREFIX {
-            // let digest_bytes = hex::decode(topic_parts[2])
-            //     .map_err(|e| format!("Could not decode fork_digest hex: {}", e))?;
-
-            // if digest_bytes.len() != 4 {
-            //     return Err(format!(
-            //         "Invalid gossipsub fork digest size: {}",
-            //         digest_bytes.len()
-            //     ));
-            // }
-
-            // let fork_digest = ForkDigest::from_slice(digest_bytes.as_slice());
-
-            // TODO(networking): Currently fork digest is "devnet0" string, that
-            //   is obviously not valid hex. For the production, the above
-            //   validations must be enabled back.
-            let fork_digest: ForkDigest = topic_parts[2].to_owned();
+            let fork_digest: ForkDigest = topic_parts[2]
+                .parse()
+                .map_err(|err| format!("Could not decode fork_digest: {err:?}"))?;
 
             let encoding = match topic_parts[4] {
                 SSZ_SNAPPY_ENCODING_POSTFIX => GossipEncoding::SSZSnappy,
@@ -197,10 +184,7 @@ impl fmt::Display for GossipTopic {
         write!(
             f,
             "/{}/{}/{}/{}",
-            TOPIC_PREFIX,
-            hex::encode(self.fork_digest),
-            self.kind,
-            encoding
+            TOPIC_PREFIX, self.fork_digest, self.kind, encoding
         )
     }
 }
@@ -209,8 +193,6 @@ impl From<Subnet> for GossipKind {
     fn from(subnet_id: Subnet) -> Self {
         match subnet_id {
             Subnet::Attestation(s) => GossipKind::Attestation(s),
-            Subnet::SyncCommittee(s) => GossipKind::SyncCommitteeMessage(s),
-            Subnet::DataColumn(s) => GossipKind::DataColumnSidecar(s),
         }
     }
 }

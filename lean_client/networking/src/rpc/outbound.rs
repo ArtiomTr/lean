@@ -3,12 +3,10 @@ use super::RequestType;
 use super::protocol::ProtocolId;
 use crate::rpc::codec::SSZSnappyOutboundCodec;
 use crate::rpc::protocol::Encoding;
-use crate::types::ForkContext;
 use futures::future::BoxFuture;
 use futures::prelude::{AsyncRead, AsyncWrite};
 use futures::{FutureExt, SinkExt};
 use libp2p::core::{OutboundUpgrade, UpgradeInfo};
-use std::sync::Arc;
 use tokio_util::{
     codec::Framed,
     compat::{Compat, FuturesAsyncReadCompatExt},
@@ -21,7 +19,6 @@ use tokio_util::{
 #[derive(Debug, Clone)]
 pub struct OutboundRequestContainer {
     pub req: RequestType,
-    pub fork_context: Arc<ForkContext>,
     pub max_rpc_size: usize,
 }
 

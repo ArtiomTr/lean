@@ -7,7 +7,6 @@ use super::protocol::{InboundOutput, Protocol, RPCError, RPCProtocol, RequestTyp
 use super::{RPCReceived, RPCSend, ReqId};
 use crate::rpc::outbound::OutboundFramed;
 use crate::rpc::protocol::InboundFramed;
-use crate::types::ForkContext;
 use fnv::FnvHashMap;
 use futures::SinkExt;
 use futures::prelude::*;
@@ -135,9 +134,6 @@ pub struct RPCHandler<Id> {
     /// This keeps track of the number of attempts.
     outbound_io_error_retries: u8,
 
-    /// Fork specific info.
-    fork_context: Arc<ForkContext>,
-
     /// Waker, to be sure the handler gets polled when needed.
     waker: Option<std::task::Waker>,
 }
@@ -217,7 +213,6 @@ pub enum OutboundSubstreamState {
 impl<Id> RPCHandler<Id> {
     pub fn new(
         listen_protocol: SubstreamProtocol<RPCProtocol, ()>,
-        fork_context: Arc<ForkContext>,
         peer_id: PeerId,
         connection_id: ConnectionId,
     ) -> Self {
@@ -237,7 +232,6 @@ impl<Id> RPCHandler<Id> {
             state: HandlerState::Active,
             max_dial_negotiated: 8,
             outbound_io_error_retries: 0,
-            fork_context,
             waker: None,
         }
     }
@@ -823,7 +817,6 @@ impl<Id: ReqId> ConnectionHandler for RPCHandler<Id> {
                 protocol: SubstreamProtocol::new(
                     OutboundRequestContainer {
                         req: req.clone(),
-                        fork_context: self.fork_context.clone(),
                         max_rpc_size: self.listen_protocol().upgrade().max_rpc_size,
                     },
                     (),
