@@ -252,12 +252,6 @@ pub enum RpcResponse {
     StreamTermination(ResponseTermination),
 }
 
-/// Request a light_client_bootstrap for light_clients peers.
-#[derive(Clone, Debug, PartialEq, Ssz)]
-pub struct LightClientBootstrapRequest {
-    pub root: H256,
-}
-
 /// The code assigned to an erroneous `RPCResponse`.
 #[derive(Debug, Clone, Copy, PartialEq, IntoStaticStr)]
 #[strum(serialize_all = "snake_case")]

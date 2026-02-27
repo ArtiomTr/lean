@@ -20,7 +20,7 @@ use crate::{
     chain::ChainService,
     clock::SystemClock,
     environment::{Effect, Event, EventSource, Message, Service, ServiceInput},
-    network::{NetworkConfig, NetworkEventSource},
+    network::NetworkEventSource,
     validator::{KeyManager, ValidatorConfig, ValidatorService},
 };
 

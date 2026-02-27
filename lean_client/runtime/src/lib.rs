@@ -12,7 +12,7 @@ mod simulator;
 mod validator;
 
 pub use environment::{Effect, Event, NetworkEvent};
-pub use network::{NetworkConfig, NetworkEffect, NetworkEventSource};
+pub use network::{NetworkEffect, NetworkEventSource};
 pub use node::Node;
 pub use simulator::Simulator;
 pub use validator::{KeyManager, ValidatorConfig};
