@@ -258,10 +258,10 @@ impl<Id> RPCHandler<Id> {
                     }));
             }
 
-            // Queue our goodbye message.
-            if let Some((id, reason)) = goodbye_reason {
-                self.dial_queue.push((id, RequestType::Goodbye(reason)));
-            }
+            // // Queue our goodbye message.
+            // if let Some((id, reason)) = goodbye_reason {
+            //     self.dial_queue.push((id, RequestType::Goodbye(reason)));
+            // }
 
             self.state = HandlerState::ShuttingDown(Box::pin(sleep(Duration::from_secs(
                 SHUTDOWN_TIMEOUT_SECS,
@@ -557,27 +557,6 @@ impl<Id: ReqId> ConnectionHandler for RPCHandler<Id> {
                                 if let Some(ref delay_key) = info.delay_key {
                                     self.inbound_substreams_delay.remove(delay_key);
                                 }
-                                // Its useful to log when the request was completed.
-                                if matches!(info.protocol, Protocol::BlocksByRange) {
-                                    debug!(
-                                        peer_id = %self.peer_id,
-                                        connection_id = %self.connection_id,
-                                        duration = Instant::now()
-                                            .duration_since(info.request_start_time)
-                                            .as_secs(),
-                                        "BlocksByRange Response sent"
-                                    );
-                                }
-                                if matches!(info.protocol, Protocol::BlobsByRange) {
-                                    debug!(
-                                        peer_id = %self.peer_id,
-                                        connection_id = %self.connection_id,
-                                        duration = Instant::now()
-                                            .duration_since(info.request_start_time)
-                                            .as_secs(),
-                                        "BlobsByRange Response sent"
-                                    );
-                                }
 
                                 // There is nothing more to process on this substream as it has
                                 // been closed. Move on to the next one.
@@ -598,22 +577,6 @@ impl<Id: ReqId> ConnectionHandler for RPCHandler<Id> {
                                     id: *id,
                                 }));
 
-                                if matches!(info.protocol, Protocol::BlocksByRange) {
-                                    debug!(
-                                        peer_id = %self.peer_id,
-                                        connection_id = %self.connection_id,
-                                        duration = info.request_start_time.elapsed().as_secs(),
-                                        "BlocksByRange Response failed"
-                                    );
-                                }
-                                if matches!(info.protocol, Protocol::BlobsByRange) {
-                                    debug!(
-                                        peer_id = %self.peer_id,
-                                        connection_id = %self.connection_id,
-                                        duration = info.request_start_time.elapsed().as_secs(),
-                                        "BlobsByRange Response failed"
-                                    );
-                                }
                                 break;
                             }
                             // The sending future has not completed. Leave the state as busy and
@@ -921,10 +884,10 @@ impl<Id: ReqId> RPCHandler<Id> {
             }
         }
 
-        // If we received a goodbye, shutdown the connection.
-        if let RequestType::Goodbye(_) = req {
-            self.shutdown(None);
-        }
+        // // If we received a goodbye, shutdown the connection.
+        // if let RequestType::Goodbye(_) = req {
+        //     self.shutdown(None);
+        // }
 
         self.events_out.push(HandlerEvent::Ok(RPCReceived::Request(
             super::InboundRequestId {

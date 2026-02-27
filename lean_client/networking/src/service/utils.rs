@@ -1,6 +1,7 @@
 use crate::types::{EnrAttestationBitfield, EnrForkId, GossipEncoding, GossipKind};
 use crate::{GossipTopic, NetworkConfig};
 use anyhow::{Result, anyhow};
+use containers::ForkDigest;
 use futures::future::Either;
 use libp2p::core::{
     multiaddr::{Multiaddr, Protocol},
@@ -22,7 +23,7 @@ pub const NETWORK_KEY_FILENAME: &str = "key";
 /// The filename to store our local metadata.
 pub const METADATA_FILENAME: &str = "metadata";
 
-pub struct Context<'a> {
+pub struct Context {
     pub config: Arc<NetworkConfig>,
     pub enr_fork_id: EnrForkId,
 }
@@ -300,7 +301,6 @@ pub fn strip_peer_id(addr: &mut Multiaddr) {
 /// possible fork digests.
 pub(crate) fn create_whitelist_filter(
     possible_fork_digests: Vec<ForkDigest>,
-    chain_config: &ChainConfig,
     attestation_subnet_count: u64,
 ) -> gossipsub::WhitelistSubscriptionFilter {
     let mut possible_hashes = HashSet::new();
@@ -319,34 +319,4 @@ pub(crate) fn create_whitelist_filter(
         }
     }
     gossipsub::WhitelistSubscriptionFilter(possible_hashes)
-}
-
-/// Persist metadata to disk
-pub(crate) fn save_metadata_to_disk(dir: Option<&Path>, metadata: MetaData) {
-    let Some(dir) = dir else {
-        debug!("Skipping Metadata writing to disk");
-        return;
-    };
-
-    let write_to_disk = || -> Result<()> {
-        let ssz_bytes = metadata.to_ssz()?;
-
-        std::fs::create_dir_all(dir)?;
-        std::fs::write(dir.join(METADATA_FILENAME), ssz_bytes)?;
-
-        Ok(())
-    };
-
-    match write_to_disk() {
-        Ok(_) => {
-            debug!("Metadata written to disk");
-        }
-        Err(e) => {
-            warn!(
-                file = format!("{:?}{:?}", dir, METADATA_FILENAME),
-                error = %e,
-                "Could not write metadata to disk"
-            );
-        }
-    }
 }

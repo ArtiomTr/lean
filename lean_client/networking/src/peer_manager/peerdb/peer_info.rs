@@ -166,22 +166,23 @@ impl PeerInfo {
     /// Returns an iterator over the long-lived subnets if it has any.
     pub fn long_lived_subnets(&self) -> Vec<Subnet> {
         let mut long_lived_subnets = Vec::new();
-        // Check the meta_data
-        if let Some(meta_data) = self.meta_data.as_ref() {
-            for subnet in 0..=meta_data.attnets().last_one().unwrap_or(0) {
-                if meta_data.attnets().get(subnet).unwrap_or(false) {
-                    long_lived_subnets.push(Subnet::Attestation((subnet as u64).into()));
-                }
-            }
+        // // Check the meta_data
+        // if let Some(meta_data) = self.meta_data.as_ref() {
+        //     for subnet in 0..=meta_data.attnets().last_one().unwrap_or(0) {
+        //         if meta_data.attnets().get(subnet).unwrap_or(false) {
+        //             long_lived_subnets.push(Subnet::Attestation((subnet as u64).into()));
+        //         }
+        //     }
 
-            if let Some(syncnet) = meta_data.syncnets() {
-                for subnet in 0..=syncnet.last_one().unwrap_or(0) {
-                    if syncnet.get(subnet).unwrap_or(false) {
-                        long_lived_subnets.push(Subnet::SyncCommittee((subnet as u64).into()));
-                    }
-                }
-            }
-        } else if let Some(enr) = self.enr.as_ref() {
+        //     if let Some(syncnet) = meta_data.syncnets() {
+        //         for subnet in 0..=syncnet.last_one().unwrap_or(0) {
+        //             if syncnet.get(subnet).unwrap_or(false) {
+        //                 long_lived_subnets.push(Subnet::SyncCommittee((subnet as u64).into()));
+        //             }
+        //         }
+        //     }
+        // } else
+        if let Some(enr) = self.enr.as_ref() {
             if let Ok(attnets) = enr.attestation_bitfield() {
                 for subnet in 0..=attnets.last_one().unwrap_or(0) {
                     if attnets.get(subnet).unwrap_or(false) {
@@ -189,21 +190,7 @@ impl PeerInfo {
                     }
                 }
             }
-
-            if let Ok(syncnets) = enr.sync_committee_bitfield() {
-                for subnet in 0..=syncnets.last_one().unwrap_or(0) {
-                    if syncnets.get(subnet).unwrap_or(false) {
-                        long_lived_subnets.push(Subnet::SyncCommittee((subnet as u64).into()));
-                    }
-                }
-            }
         }
-
-        long_lived_subnets.extend(
-            self.custody_subnets
-                .iter()
-                .map(|&id| Subnet::DataColumn(id)),
-        );
 
         long_lived_subnets
     }
@@ -230,17 +217,17 @@ impl PeerInfo {
 
     /// Returns true if the peer is connected to a long-lived subnet.
     pub fn has_long_lived_subnet(&self) -> bool {
-        // Check the meta_data
-        if let Some(meta_data) = self.meta_data.as_ref() {
-            if !meta_data.attnets().none() && !self.subnets.is_empty() {
-                return true;
-            }
-            if let Some(sync) = meta_data.syncnets() {
-                if !sync.none() {
-                    return true;
-                }
-            }
-        }
+        // // Check the meta_data
+        // if let Some(meta_data) = self.meta_data.as_ref() {
+        //     if !meta_data.attnets().none() && !self.subnets.is_empty() {
+        //         return true;
+        //     }
+        //     if let Some(sync) = meta_data.syncnets() {
+        //         if !sync.none() {
+        //             return true;
+        //         }
+        //     }
+        // }
 
         // We may not have the metadata but may have an ENR. Lets check that
         if let Some(enr) = self.enr.as_ref() {
@@ -251,15 +238,15 @@ impl PeerInfo {
             }
         }
 
-        // Check if the peer has custody subnets populated and the peer is subscribed to any of
-        // its custody subnets
-        let subscribed_to_any_custody_subnets = self
-            .custody_subnets
-            .iter()
-            .any(|subnet_id| self.subnets.contains(&Subnet::DataColumn(*subnet_id)));
-        if subscribed_to_any_custody_subnets {
-            return true;
-        }
+        // // Check if the peer has custody subnets populated and the peer is subscribed to any of
+        // // its custody subnets
+        // let subscribed_to_any_custody_subnets = self
+        //     .custody_subnets
+        //     .iter()
+        //     .any(|subnet_id| self.subnets.contains(&Subnet::DataColumn(*subnet_id)));
+        // if subscribed_to_any_custody_subnets {
+        //     return true;
+        // }
 
         false
     }
@@ -659,8 +646,8 @@ mod tests {
         peer_info.custody_subnets.insert(2);
         peer_info.custody_subnets.insert(3);
 
-        peer_info.subnets.insert(Subnet::DataColumn(1));
-        peer_info.subnets.insert(Subnet::DataColumn(2));
+        // peer_info.subnets.insert(Subnet::DataColumn(1));
+        // peer_info.subnets.insert(Subnet::DataColumn(2));
         // Missing DataColumnSubnetId::new(3) - but peer is subscribed to some custody subnets
         // Peer is subscribed to any custody subnets - return true
         assert!(peer_info.has_long_lived_subnet());

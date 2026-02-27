@@ -147,7 +147,7 @@ impl EventSource for SystemClock {
     // Clock emits only tick events.
     type Event = Tick;
 
-    fn run(
+    async fn run(
         &mut self,
         tx: mpsc::UnboundedSender<Self::Event>,
         _: mpsc::UnboundedReceiver<Self::Effect>,

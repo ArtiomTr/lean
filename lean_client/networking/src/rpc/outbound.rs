@@ -50,9 +50,7 @@ where
         // convert to a tokio compatible socket
         let socket = socket.compat();
         let codec = match protocol.encoding {
-            Encoding::SSZSnappy => {
-                SSZSnappyOutboundCodec::new(protocol, self.max_rpc_size, self.fork_context.clone())
-            }
+            Encoding::SSZSnappy => SSZSnappyOutboundCodec::new(protocol, self.max_rpc_size),
         };
 
         let mut socket = Framed::new(socket, codec);

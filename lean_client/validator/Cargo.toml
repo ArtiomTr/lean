@@ -9,7 +9,6 @@ containers = { workspace = true }
 ethereum-types = { workspace = true }
 fork_choice = { workspace = true }
 metrics = { workspace = true }
-eth3_libp2p = { workspace = true }
 serde_yaml = { workspace = true }
 ssz = { workspace = true }
 tokio = { workspace = true }

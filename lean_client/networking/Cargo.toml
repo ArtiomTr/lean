@@ -5,6 +5,7 @@ edition = { workspace = true }
 [dependencies]
 alloy-rlp = { workspace = true }
 anyhow = { workspace = true }
+bls = { workspace = true }
 dirs = { workspace = true }
 discv5 = { workspace = true }
 grandine_version = { workspace = true }

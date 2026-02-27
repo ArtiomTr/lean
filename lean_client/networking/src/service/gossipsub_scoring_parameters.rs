@@ -50,7 +50,10 @@ pub struct PeerScoreSettings {
 
 impl PeerScoreSettings {
     pub fn new(mesh_n: usize) -> PeerScoreSettings {
-        let slot = chain_config.slot_duration_ms;
+        // let slot = chain_config.slot_duration_ms;
+        // TODO(networking): fix duration here, it should be taken from chain
+        //   config, instead of hardcoding directly.
+        let slot = Duration::from_secs(4);
         let beacon_attestation_subnet_weight = 1.0 / AttestationSubnetCount::U64 as f64;
         let max_positive_score = (MAX_IN_MESH_SCORE + MAX_FIRST_MESSAGE_DELIVERIES_SCORE)
             * (BEACON_BLOCK_WEIGHT
@@ -81,11 +84,17 @@ impl PeerScoreSettings {
         let mut params = PeerScoreParams {
             decay_interval: self.decay_interval,
             decay_to_zero: self.decay_to_zero,
-            retain_score: self.epoch * 100,
+            // TODO(networking): there was epoch duration previously, but not
+            //   clear why though. For now, just simply replaced epoch duration
+            //   with slot duration x 32, not clear if that is correct or not.
+            retain_score: self.slot * 32 * 100,
             app_specific_weight: 1.0,
             ip_colocation_factor_threshold: 8.0, // Allow up to 8 nodes per IP
             behaviour_penalty_threshold: 6.0,
-            behaviour_penalty_decay: self.score_parameter_decay(self.epoch * 10),
+            // TODO(networking): there was epoch duration previously, but not
+            //   clear why though. For now, just simply replaced epoch duration
+            //   with slot duration x 32, not clear if that is correct or not.
+            behaviour_penalty_decay: self.score_parameter_decay(self.slot * 32 * 10),
             slow_peer_decay: 0.1,
             slow_peer_weight: -10.0,
             slow_peer_threshold: 0.0,
@@ -94,7 +103,10 @@ impl PeerScoreSettings {
 
         let target_value = Self::decay_convergence(
             params.behaviour_penalty_decay,
-            10.0 / P::SlotsPerEpoch::U64 as f64,
+            // TODO(networking): there was slots per epoch previously, but not
+            //   clear why though. In lean ethereum there is no definition of
+            //   "epochs", so currently just replaced this with 32 literal.
+            10.0 / 32.0f64,
         ) - params.behaviour_penalty_threshold;
         params.behaviour_penalty_weight = thresholds.gossip_threshold / target_value.powi(2);
 
@@ -109,50 +121,13 @@ impl PeerScoreSettings {
             topic.hash()
         };
 
-        //first all fixed topics
-        params.topics.insert(
-            get_hash(GossipKind::VoluntaryExit),
-            Self::get_topic_params(
-                self,
-                VOLUNTARY_EXIT_WEIGHT,
-                4.0 / P::SlotsPerEpoch::U64 as f64,
-                self.epoch * 100,
-                None,
-            ),
-        );
-        params.topics.insert(
-            get_hash(GossipKind::AttesterSlashing),
-            Self::get_topic_params(
-                self,
-                ATTESTER_SLASHING_WEIGHT,
-                1.0 / 5.0 / P::SlotsPerEpoch::U64 as f64,
-                self.epoch * 100,
-                None,
-            ),
-        );
-        params.topics.insert(
-            get_hash(GossipKind::ProposerSlashing),
-            Self::get_topic_params(
-                self,
-                PROPOSER_SLASHING_WEIGHT,
-                1.0 / 5.0 / P::SlotsPerEpoch::U64 as f64,
-                self.epoch * 100,
-                None,
-            ),
-        );
-
         //dynamic topics
         let (beacon_block_params, beacon_aggregate_proof_params, beacon_attestation_subnet_params) =
             self.get_dynamic_topic_params(active_validators, current_slot);
 
         params
             .topics
-            .insert(get_hash(GossipKind::BeaconBlock), beacon_block_params);
-
-        params.topics.insert(
-            get_hash(GossipKind::BeaconAggregateAndProof),
-            beacon_aggregate_proof_params,
-        );
+            .insert(get_hash(GossipKind::Block), beacon_block_params);
 
         for i in 0..self.attestation_subnet_count {
             params.topics.insert(
@@ -169,51 +144,64 @@ impl PeerScoreSettings {
         active_validators: u64,
         current_slot: Slot,
     ) -> (TopicScoreParams, TopicScoreParams, TopicScoreParams) {
-        let committees_per_slot =
-            misc::committee_count_from_active_validator_count::<P>(active_validators);
-        let aggregators_per_slot = self.expected_aggregator_count_per_slot(active_validators);
-        let multiple_bursts_per_subnet_per_epoch =
-            committees_per_slot as u64 >= 2 * self.attestation_subnet_count / P::SlotsPerEpoch::U64;
+        // let aggregators_per_slot = self.expected_aggregator_count_per_slot(active_validators);
+        // let multiple_bursts_per_subnet_per_epoch =
+        //     committees_per_slot as u64 >= 2 * self.attestation_subnet_count / P::SlotsPerEpoch::U64;
+        let multiple_bursts_per_subnet_per_epoch = true;
 
         let beacon_block_params = Self::get_topic_params(
             self,
             BEACON_BLOCK_WEIGHT,
             1.0,
-            self.epoch * 20,
-            Some((P::SlotsPerEpoch::U64 * 5, 3.0, self.epoch, current_slot)),
+            // TODO(networking): there was epoch duration previously, but not
+            //   clear why though. For now, just simply replaced epoch duration
+            //   with slot duration x 32, not clear if that is correct or not.
+            self.slot * 32 * 20,
+            Some((32 * 5, 3.0, self.slot * 32, current_slot)),
         );
 
         let beacon_aggregate_proof_params = Self::get_topic_params(
             self,
             BEACON_AGGREGATE_PROOF_WEIGHT,
-            aggregators_per_slot,
-            self.epoch,
-            Some((P::SlotsPerEpoch::U64 * 2, 4.0, self.epoch, current_slot)),
+            // TODO(networking): arbitrary value taken here
+            100.0,
+            // TODO(networking): there was epoch duration previously, but not
+            //   clear why though. For now, just simply replaced epoch duration
+            //   with slot duration x 32, not clear if that is correct or not.
+            self.slot * 32,
+            // TODO(networking): there was epoch duration previously, but not
+            //   clear why though. For now, just simply replaced epoch duration
+            //   with slot duration x 32, not clear if that is correct or not.
+            Some((32 * 2, 4.0, self.slot * 32, current_slot)),
         );
         let beacon_attestation_subnet_params = Self::get_topic_params(
             self,
             self.beacon_attestation_subnet_weight,
-            active_validators as f64
-                / self.attestation_subnet_count as f64
-                / P::SlotsPerEpoch::U64 as f64,
-            self.epoch
+            active_validators as f64 / self.attestation_subnet_count as f64 / 32 as f64,
+            // TODO(networking): there was epoch duration previously, but not
+            //   clear why though. For now, just simply replaced epoch duration
+            //   with slot duration x 32, not clear if that is correct or not.
+            self.slot
+                * 32
                 * (if multiple_bursts_per_subnet_per_epoch {
                     1
                 } else {
                     4
                 }),
             Some((
-                P::SlotsPerEpoch::U64
-                    * (if multiple_bursts_per_subnet_per_epoch {
-                        4
-                    } else {
-                        16
-                    }),
+                32 * (if multiple_bursts_per_subnet_per_epoch {
+                    4
+                } else {
+                    16
+                }),
                 16.0,
                 if multiple_bursts_per_subnet_per_epoch {
-                    self.slot * (P::SlotsPerEpoch::U64 as u32 / 2 + 1)
+                    self.slot * (32 as u32 / 2 + 1)
                 } else {
-                    self.epoch * 3
+                    // TODO(networking): there was epoch duration previously, but not
+                    //   clear why though. For now, just simply replaced epoch duration
+                    //   with slot duration x 32, not clear if that is correct or not.
+                    self.slot * 32 * 3
                 },
                 current_slot,
             )),
@@ -247,29 +235,29 @@ impl PeerScoreSettings {
         Self::decay_convergence(decay, rate) * decay
     }
 
-    fn expected_aggregator_count_per_slot(&self, active_validators: u64) -> f64 {
-        let committees_per_slot =
-            misc::committee_count_from_active_validator_count::<P>(active_validators);
+    // fn expected_aggregator_count_per_slot(&self, active_validators: u64) -> f64 {
+    //     let committees_per_slot =
+    //         misc::committee_count_from_active_validator_count::<P>(active_validators);
 
-        let committees = committees_per_slot * P::SlotsPerEpoch::U64;
+    //     let committees = committees_per_slot * P::SlotsPerEpoch::U64;
 
-        let smaller_committee_size = active_validators / committees;
-        let num_larger_committees = active_validators - smaller_committee_size * committees;
+    //     let smaller_committee_size = active_validators / committees;
+    //     let num_larger_committees = active_validators - smaller_committee_size * committees;
 
-        let modulo_smaller = max(
-            1,
-            smaller_committee_size / self.target_aggregators_per_committee,
-        );
-        let modulo_larger = max(
-            1,
-            (smaller_committee_size + 1) / self.target_aggregators_per_committee,
-        );
+    //     let modulo_smaller = max(
+    //         1,
+    //         smaller_committee_size / self.target_aggregators_per_committee,
+    //     );
+    //     let modulo_larger = max(
+    //         1,
+    //         (smaller_committee_size + 1) / self.target_aggregators_per_committee,
+    //     );
 
-        (((committees - num_larger_committees) * smaller_committee_size) as f64
-            / modulo_smaller as f64
-            + (num_larger_committees * (smaller_committee_size + 1)) as f64 / modulo_larger as f64)
-            / P::SlotsPerEpoch::U64 as f64
-    }
+    //     (((committees - num_larger_committees) * smaller_committee_size) as f64
+    //         / modulo_smaller as f64
+    //         + (num_larger_committees * (smaller_committee_size + 1)) as f64 / modulo_larger as f64)
+    //         / P::SlotsPerEpoch::U64 as f64
+    // }
 
     fn score_parameter_decay(&self, decay_time: Duration) -> f64 {
         Self::score_parameter_decay_with_base(decay_time, self.decay_interval, self.decay_to_zero)
@@ -319,7 +307,7 @@ impl PeerScoreSettings {
             t_params.mesh_failure_penalty_decay = t_params.mesh_message_deliveries_decay;
             t_params.mesh_message_deliveries_weight = -t_params.topic_weight;
             t_params.mesh_failure_penalty_weight = t_params.mesh_message_deliveries_weight;
-            if decay_slots >= current_slot {
+            if decay_slots >= current_slot.0 {
                 t_params.mesh_message_deliveries_threshold = 0.0;
                 t_params.mesh_message_deliveries_weight = 0.0;
             }
@@ -336,7 +324,10 @@ impl PeerScoreSettings {
 
         t_params.invalid_message_deliveries_weight =
             -self.max_positive_score / t_params.topic_weight;
-        t_params.invalid_message_deliveries_decay = self.score_parameter_decay(self.epoch * 50);
+        // TODO(networking): there was epoch duration previously, but not
+        //   clear why though. For now, just simply replaced epoch duration
+        //   with slot duration x 32, not clear if that is correct or not.
+        t_params.invalid_message_deliveries_decay = self.score_parameter_decay(self.slot * 32 * 50);
 
         t_params
     }

@@ -234,10 +234,6 @@ impl SSZSnappyOutboundCodec {
                 let n = reader.get_ref().get_ref().position();
                 self.len = None;
                 let _read_bytes = src.split_to(n as usize);
-                // Safe to `take` from `self.fork_name` as we have all the bytes we need to
-                // decode an ssz object at this point.
-                let phase = self.phase;
-                self.phase = None;
                 handle_rpc_response(self.protocol.versioned_protocol, &decoded_buffer)
             }
             Err(e) => handle_error(e, reader.get_ref().get_ref().position(), max_compressed_len),

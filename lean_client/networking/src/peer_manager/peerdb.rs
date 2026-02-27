@@ -1,6 +1,6 @@
 use crate::discovery::{CombinedKey, peer_id_to_node_id};
 use crate::{Enr, EnrExt, Gossipsub, Multiaddr, PeerId, SyncInfo, types::Subnet};
-use containers::{Slot, SubnetId};
+use containers::{Checkpoint, Slot, SubnetId};
 use itertools::Itertools as _;
 use peer_info::{ConnectionDirection, PeerConnectionStatus, PeerInfo};
 use score::{PeerAction, ReportSource, Score, ScoreState};
@@ -265,7 +265,6 @@ impl PeerDB {
                 // We check both the metadata and gossipsub data as we only want to count long-lived subscribed peers
                 info.is_connected()
                     && info.is_synced_or_advanced()
-                    && info.on_subnet_metadata(&subnet)
                     && info.on_subnet_gossipsub(&subnet)
                     && info.is_good_gossipsub_peer()
             })
@@ -652,11 +651,7 @@ impl PeerDB {
     pub(crate) fn extend_peers_on_subnet(&mut self, subnet: &Subnet, min_ttl: Instant) {
         self.peers
             .iter_mut()
-            .filter(move |(_, info)| {
-                info.is_connected()
-                    && info.on_subnet_metadata(subnet)
-                    && info.on_subnet_gossipsub(subnet)
-            })
+            .filter(move |(_, info)| info.is_connected() && info.on_subnet_gossipsub(subnet))
             .for_each(|(peer_id, info)| {
                 if info.min_ttl().is_none() || Some(&min_ttl) > info.min_ttl() {
                     info.set_min_ttl(min_ttl);
@@ -740,10 +735,14 @@ impl PeerDB {
             SyncStatus::Synced {
                 // Fill in mock SyncInfo, only for the peer to return `is_synced() == true`.
                 info: SyncInfo {
-                    head_slot: Slot(0),
-                    head_root: H256::zero(),
-                    finalized_epoch: 0,
-                    finalized_root: H256::zero(),
+                    head: Checkpoint {
+                        slot: Slot(0),
+                        root: H256::zero(),
+                    },
+                    finalized: Checkpoint {
+                        slot: Slot(0),
+                        root: H256::zero(),
+                    },
                     earliest_available_slot: Some(Slot(0)),
                 },
             },

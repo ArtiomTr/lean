@@ -226,11 +226,7 @@ where
             // convert the socket to tokio compatible socket
             let socket = socket.compat();
             let codec = match protocol.encoding {
-                Encoding::SSZSnappy => SSZSnappyInboundCodec::new(
-                    protocol,
-                    self.max_rpc_size,
-                    self.fork_context.clone(),
-                ),
+                Encoding::SSZSnappy => SSZSnappyInboundCodec::new(protocol, self.max_rpc_size),
             };
 
             let socket = Framed::new(Box::pin(socket), codec);
@@ -296,10 +292,10 @@ impl RequestType {
                 SupportedProtocol::StatusV1,
                 Encoding::SSZSnappy,
             )],
-            RequestType::BlocksByRoot(_) => vec![
-                ProtocolId::new(SupportedProtocol::BlocksByRootV2, Encoding::SSZSnappy),
-                ProtocolId::new(SupportedProtocol::BlocksByRootV1, Encoding::SSZSnappy),
-            ],
+            RequestType::BlocksByRoot(_) => vec![ProtocolId::new(
+                SupportedProtocol::BlocksByRootV1,
+                Encoding::SSZSnappy,
+            )],
         }
     }
 

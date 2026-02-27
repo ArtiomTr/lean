@@ -153,14 +153,12 @@ pub struct RPC<Id: ReqId> {
     active_inbound_requests: HashMap<InboundRequestId, ActiveInboundRequest>,
     /// Queue of events to be processed.
     events: Vec<BehaviourAction<Id>>,
-    enable_light_client_server: bool,
     /// A sequential counter indicating when data gets modified.
     seq_number: u64,
 }
 
 impl<Id: ReqId> RPC<Id> {
     pub fn new(
-        enable_light_client_server: bool,
         inbound_rate_limiter_config: Option<InboundRateLimiterConfig>,
         outbound_rate_limiter_config: Option<OutboundRateLimiterConfig>,
         seq_number: u64,
@@ -180,7 +178,6 @@ impl<Id: ReqId> RPC<Id> {
             outbound_request_limiter,
             active_inbound_requests: HashMap::new(),
             events: Vec::new(),
-            enable_light_client_server,
             seq_number,
         }
     }
@@ -305,7 +302,10 @@ impl<Id: ReqId> NetworkBehaviour for RPC<Id> {
     ) -> Result<libp2p::swarm::THandler<Self>, libp2p::swarm::ConnectionDenied> {
         let protocol = SubstreamProtocol::new(
             RPCProtocol {
-                max_rpc_size: self.chain_config.max_payload_size,
+                // TODO(networking): this should be the constant from chain
+                //   config. Currently, for simplification, but as hardcoded
+                //   constant instead.
+                max_rpc_size: 10 * 1024 * 1024,
             },
             (),
         );
@@ -325,7 +325,10 @@ impl<Id: ReqId> NetworkBehaviour for RPC<Id> {
     ) -> Result<libp2p::swarm::THandler<Self>, libp2p::swarm::ConnectionDenied> {
         let protocol = SubstreamProtocol::new(
             RPCProtocol {
-                max_rpc_size: self.chain_config.max_payload_size,
+                // TODO(networking): this should be the constant from chain
+                //   config. Currently, for simplification, but as hardcoded
+                //   constant instead.
+                max_rpc_size: 10 * 1024 * 1024,
             },
             (),
         );

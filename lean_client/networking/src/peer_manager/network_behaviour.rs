@@ -49,7 +49,7 @@ impl NetworkBehaviour for PeerManager {
             match self.inbound_ping_peers.poll_next_unpin(cx) {
                 Poll::Ready(Some(Ok(peer_id))) => {
                     self.inbound_ping_peers.insert(peer_id);
-                    self.events.push(PeerManagerEvent::Ping(peer_id));
+                    // self.events.push(PeerManagerEvent::Ping(peer_id));
                 }
                 Poll::Ready(Some(Err(e))) => {
                     error!(
@@ -65,7 +65,7 @@ impl NetworkBehaviour for PeerManager {
             match self.outbound_ping_peers.poll_next_unpin(cx) {
                 Poll::Ready(Some(Ok(peer_id))) => {
                     self.outbound_ping_peers.insert(peer_id);
-                    self.events.push(PeerManagerEvent::Ping(peer_id));
+                    // self.events.push(PeerManagerEvent::Ping(peer_id));
                 }
                 Poll::Ready(Some(Err(e))) => {
                     error!(

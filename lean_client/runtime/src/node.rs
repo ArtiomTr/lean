@@ -12,7 +12,7 @@
 //! Currently all effects go to the `NetworkEventSource`; the clock has no effects.
 
 use anyhow::{Error, Result};
-use fork_choice::store::Store;
+use fork_choice::Store;
 use tokio::sync::mpsc;
 use tracing::warn;
 

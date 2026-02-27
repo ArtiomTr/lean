@@ -122,7 +122,7 @@ pub trait EventSource {
     type Event: Send + 'static;
     type Effect;
 
-    fn run(
+    async fn run(
         &mut self,
         tx: mpsc::UnboundedSender<Self::Event>,
         rx: mpsc::UnboundedReceiver<Self::Effect>,

@@ -2,7 +2,6 @@
 members = [
     "chain",
     "containers",
-    "eth3_libp2p",
     "fork_choice",
     "grandine_version",
     "http_api",
@@ -224,12 +223,11 @@ private_intra_doc_links = 'allow'
 [workspace.dependencies]
 chain = { path = "./chain" }
 containers = { path = "./containers" }
-eth3_libp2p = { path = "./eth3_libp2p" }
 fork_choice = { path = "./fork_choice" }
 grandine_version = { path = "./grandine_version" }
 http_api = { path = "./http_api" }
 metrics = { path = "./metrics" }
-networking = { path = "./eth3_libp2p", package = "eth3_libp2p" }
+networking = { path = "./networking" }
 runtime = { path = "./runtime" }
 validator = { path = "./validator" }
 xmss = { path = "./xmss" }

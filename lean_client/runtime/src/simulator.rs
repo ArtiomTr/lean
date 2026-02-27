@@ -38,7 +38,7 @@
 
 use std::collections::VecDeque;
 
-use fork_choice::store::Store;
+use fork_choice::Store;
 use rand::Rng as _;
 use rand_chacha::{ChaCha8Rng, rand_core::SeedableRng as _};
 use tracing::warn;

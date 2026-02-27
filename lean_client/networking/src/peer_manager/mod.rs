@@ -126,8 +126,8 @@ pub enum PeerManagerEvent {
     PeerDisconnected(PeerId),
     /// Sends a STATUS to a peer.
     Status(PeerId),
-    /// Sends a PING to a peer.
-    Ping(PeerId),
+    // /// Sends a PING to a peer.
+    // Ping(PeerId),
     /// The peer should be disconnected.
     DisconnectPeer(PeerId, GoodbyeReason),
     /// Inform the behaviour to ban this peer and associated ip addresses.

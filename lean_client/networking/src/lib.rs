@@ -7,6 +7,7 @@ mod listen_addr;
 mod peer_manager;
 mod rpc;
 mod service;
+mod task_executor;
 mod types;
 
 use std::str::FromStr;
@@ -14,12 +15,15 @@ use std::str::FromStr;
 use libp2p::swarm::DialError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
-pub use crate::discovery::{CombinedKeyExt, EnrExt, Eth2Enr};
-pub use crate::types::{Enr, GossipTopic, NetworkGlobals, Subnet, SubnetDiscovery};
 pub use config::Config as NetworkConfig;
+pub use discovery::{CombinedKeyExt, EnrExt, Eth2Enr};
 pub use libp2p::{Multiaddr, PeerId, gossipsub::TopicHash};
 pub use peer_manager::{SyncInfo, peerdb::client::Client};
-pub use service::{Gossipsub, NetworkEvent};
+pub use service::{Gossipsub, Network, NetworkEvent, utils::Context as ServiceContext};
+pub use task_executor::TaskExecutor;
+pub use types::{
+    Enr, EnrForkId, GossipTopic, NetworkGlobals, PubsubMessage, Subnet, SubnetDiscovery,
+};
 
 /// Wrapper over a libp2p `PeerId` which implements `Serialize` and `Deserialize`
 #[derive(Clone, Debug)]
