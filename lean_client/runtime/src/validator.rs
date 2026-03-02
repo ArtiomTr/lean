@@ -14,8 +14,8 @@
 //! This service never accesses the Store directly. All store interactions
 //! happen through Messages routed via the Node.
 
-use std::collections::HashMap;
 use std::path::Path;
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Result, anyhow};
 use containers::{
@@ -248,7 +248,9 @@ impl Service for ValidatorService {
                 };
 
                 ServiceOutput::chain_message(ChainMessage::ProcessAttestation(proposer_signed_att))
-                    .with_effect(Effect::Network(NetworkEffect::GossipBlock(signed_block)))
+                    .with_effect(Effect::Network(NetworkEffect::PublishBlock(Arc::new(
+                        signed_block,
+                    ))))
             }
 
             // ── Attestation flow ─────────────────────────────────────────────
@@ -301,8 +303,8 @@ impl Service for ValidatorService {
                     // Feed into local fork choice and broadcast to the network.
                     output = output
                         .with_chain_message(ChainMessage::ProcessAttestation(signed_att.clone()))
-                        .with_effect(Effect::Network(NetworkEffect::GossipAttestation(
-                            signed_att,
+                        .with_effect(Effect::Network(NetworkEffect::PublishAttestation(
+                            Arc::new(signed_att),
                         )));
                 }
 

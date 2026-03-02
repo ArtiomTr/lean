@@ -13,6 +13,7 @@
 
 use anyhow::{Error, Result};
 use fork_choice::Store;
+use networking::NetworkConfig;
 use tokio::sync::mpsc;
 use tracing::warn;
 
@@ -62,27 +63,26 @@ impl Node {
         Ok(())
     }
 
-    fn spawn_event_source<T: EventSource>(
+    async fn spawn_event_source<T: EventSource>(
         mut source: T,
         tx: mpsc::UnboundedSender<Event>,
         map_event: impl Fn(T::Event) -> Event + 'static + Send,
-    ) -> mpsc::UnboundedSender<T::Effect> {
+    ) -> Result<mpsc::UnboundedSender<T::Effect>> {
         let (temp_tx, mut temp_rx) = mpsc::unbounded_channel();
 
         tokio::task::spawn(async move {
             while let Some(event) = temp_rx.recv().await {
                 let event = map_event(event);
-                // Ignore send errors: the event loop has exited.
-                tx.send(event).ok();
+                // TODO(networking): log error here
+                tx.send(event);
             }
         });
 
         let (out_tx, out_rx) = mpsc::unbounded_channel();
 
-        // Errors are logged inside the EventSource itself.
-        source.run(temp_tx, out_rx).ok();
+        source.run(temp_tx, out_rx).await?;
 
-        out_tx
+        Ok(out_tx)
     }
 
     fn spawn_service<T: Service + 'static + Send>(
@@ -114,16 +114,14 @@ impl Node {
         // Event broadcast channel — EventSources publish Events here.
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
 
-        // Clock: always present — drives slot/interval ticks.
         Self::spawn_event_source(self.clock, event_tx.clone(), Event::Tick);
 
-        // Network: emits inbound blocks/attestations, consumes effects.
-        // We keep the effect sender so we can route Effects to the network later.
         let network_effect_tx = Self::spawn_event_source(
             NetworkEventSource::new(self.network_config),
             event_tx.clone(),
             Event::Network,
-        );
+        )
+        .await?;
 
         let (message_tx, mut message_rx) = mpsc::unbounded_channel();
         let (effect_tx, mut effect_rx) = mpsc::unbounded_channel();
@@ -176,8 +174,12 @@ impl Node {
         // Currently all effects are network effects; the clock has no effects.
         tokio::spawn(async move {
             while let Some(effect) = effect_rx.recv().await {
-                if network_effect_tx.send(effect).is_err() {
-                    break;
+                match effect {
+                    Effect::Network(effect) => {
+                        if network_effect_tx.send(effect).is_err() {
+                            break;
+                        }
+                    }
                 }
             }
         });

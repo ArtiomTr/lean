@@ -1,14 +1,16 @@
 use std::{collections::HashMap, fs::File, panic::AssertUnwindSafe, path::Path};
 
+use clock::Interval;
 use containers::{
     AggregatedAttestation, AggregationBits, Attestation, AttestationData, Block, BlockBody,
     BlockHeader, BlockSignatures, BlockWithAttestation, Checkpoint, Config, HistoricalBlockHashes,
     JustificationRoots, JustificationValidators, JustifiedSlots, SignedBlockWithAttestation, Slot,
     State, Validator, Validators,
 };
+use enum_iterator::Sequence as _;
 use fork_choice::Store;
 use serde::Deserialize;
-use ssz::{H256, SszHash as _};
+use ssz::{SszHash as _, H256};
 use test_generator::test_resources;
 use xmss::PublicKey;
 
@@ -525,11 +527,13 @@ fn forkchoice(spec_file: &str) {
                         };
                         let block_root = signed_block.message.block.hash_tree_root();
 
-                        // Advance time to the block's slot to ensure attestations are processable
-                        // SECONDS_PER_SLOT is 4 (not 12)
-                        let block_time =
-                            store.config().genesis_time + (signed_block.message.block.slot.0 * 4);
-                        store.on_tick(block_time, false, false);
+                        // Advance time to the block's proposal interval.
+                        store.on_tick(
+                            signed_block.message.block.slot,
+                            Interval::BlockProposal,
+                            false,
+                            false,
+                        );
 
                         store.on_block(signed_block).unwrap();
                         Ok(block_root)
@@ -568,7 +572,11 @@ fn forkchoice(spec_file: &str) {
                         .tick
                         .or(step.time)
                         .expect(&format!("Step {step_idx}: Missing tick/time data"));
-                    store.on_tick(time_value, false, false);
+                    let intervals_per_slot = Interval::CARDINALITY as u64;
+                    let slot = Slot(time_value / intervals_per_slot);
+                    let interval = Interval::from_repr((time_value % intervals_per_slot) as u8)
+                        .expect("interval index must be in range");
+                    store.on_tick(slot, interval, false, false);
 
                     if step.valid {
                         verify_checks(&store, &step.checks, &block_labels, step_idx).expect(

@@ -5,7 +5,9 @@ edition = { workspace = true }
 [dependencies]
 anyhow = { workspace = true }
 bls = { workspace = true }
+clock = { path = "../clock" }
 containers = { workspace = true }
+enum-iterator = { workspace = true }
 metrics = { workspace = true }
 ssz = { workspace = true }
 tracing = { workspace = true }

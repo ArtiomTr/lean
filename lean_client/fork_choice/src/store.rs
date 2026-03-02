@@ -4,6 +4,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{Result, anyhow, ensure};
+use clock::Interval as ClockInterval;
 use containers::{
     AggregatedSignatureProof, AggregationBits, Attestation, AttestationData, Block, Checkpoint,
     Config, SignatureKey, SignedAggregatedAttestation, SignedAttestation,
@@ -13,8 +14,6 @@ use metrics::set_gauge_u64;
 use ssz::{H256, SszHash as _};
 use xmss::Signature;
 
-pub type Interval = u64;
-pub const INTERVALS_PER_SLOT: Interval = 5;
 pub const SECONDS_PER_SLOT: u64 = 4;
 pub const ATTESTATION_COMMITTEE_COUNT: u64 = 1;
 pub const JUSTIFICATION_LOOKBACK_SLOTS: u64 = 3;
@@ -28,8 +27,8 @@ pub const JUSTIFICATION_LOOKBACK_SLOTS: u64 = 3;
 /// - and aggregated signature proofs for attestations that influence fork choice.
 #[derive(Debug, Clone, Default)]
 pub struct Store {
-    /// Current time in intervals since genesis
-    time: Interval,
+    /// Current slot according to latest clock tick
+    current_slot: Slot,
 
     /// Chain configuration parameters
     config: Config,
@@ -103,7 +102,7 @@ impl Store {
         };
 
         Store {
-            time: anchor_slot.0 * INTERVALS_PER_SLOT,
+            current_slot: anchor_slot,
             config: anchor_state.config.clone(),
             head: anchor_root,
             safe_target: anchor_root,
@@ -120,11 +119,6 @@ impl Store {
     }
 
     // ========== Getters ==========
-
-    #[inline]
-    pub fn time(&self) -> Interval {
-        self.time
-    }
 
     #[inline]
     pub fn config(&self) -> &Config {
@@ -296,12 +290,11 @@ impl Store {
         );
 
         // Time Check: attestation must not be more than 1 slot in the future.
-        let current_slot = self.time / INTERVALS_PER_SLOT;
         ensure!(
-            data.slot.0 <= current_slot + 1,
+            data.slot.0 <= self.current_slot.0 + 1,
             "Attestation too far in future: slot {} > current {} + 1",
             data.slot.0,
-            current_slot
+            self.current_slot.0
         );
 
         Ok(())
@@ -739,18 +732,19 @@ impl Store {
 
     pub fn tick_interval(
         &mut self,
+        interval: ClockInterval,
         has_proposal: bool,
         is_aggregator: bool,
     ) -> Vec<SignedAggregatedAttestation> {
-        self.time += 1;
-        let curr_interval = self.time % INTERVALS_PER_SLOT;
         let mut new_aggregates = vec![];
 
-        match curr_interval {
-            0 if has_proposal => self.accept_new_attestations(),
-            2 if is_aggregator => new_aggregates = self.aggregate_committee_signatures(),
-            3 => self.update_safe_target(),
-            4 => self.accept_new_attestations(),
+        match interval {
+            ClockInterval::BlockProposal if has_proposal => self.accept_new_attestations(),
+            ClockInterval::AttestationBroadcast if is_aggregator => {
+                new_aggregates = self.aggregate_committee_signatures();
+            }
+            ClockInterval::SafeTargetUpdate => self.update_safe_target(),
+            ClockInterval::AttestationAcceptance => self.accept_new_attestations(),
             _ => {}
         }
 
@@ -759,19 +753,13 @@ impl Store {
 
     pub fn on_tick(
         &mut self,
-        target_interval: u64,
+        slot: Slot,
+        interval: ClockInterval,
         has_proposal: bool,
         is_aggregator: bool,
     ) -> Vec<SignedAggregatedAttestation> {
-        let mut all_new_aggregates = vec![];
-
-        while self.time < target_interval {
-            let should_signal_proposal = has_proposal && (self.time + 1) == target_interval;
-            let new_aggregates = self.tick_interval(should_signal_proposal, is_aggregator);
-            all_new_aggregates.extend(new_aggregates);
-        }
-
-        all_new_aggregates
+        self.current_slot = slot;
+        self.tick_interval(interval, has_proposal, is_aggregator)
     }
 
     /// Algorithm:
@@ -835,9 +823,8 @@ impl Store {
 
     #[inline]
     pub fn get_proposal_head(&mut self, slot: Slot) -> H256 {
-        // Advance time to this slot's first interval
-        let target_interval = slot.0 * INTERVALS_PER_SLOT;
-        self.on_tick(target_interval, true, false);
+        // Advance store slot to this slot's proposal interval
+        self.on_tick(slot, ClockInterval::BlockProposal, true, false);
         self.accept_new_attestations();
         self.head
     }
@@ -1070,10 +1057,6 @@ impl Store {
         self.safe_target = safe_target;
     }
 
-    pub fn set_time(&mut self, time: Interval) {
-        self.time = time;
-    }
-
     pub fn insert_block(&mut self, root: H256, block: Block) {
         self.blocks.insert(root, block);
     }
@@ -1165,48 +1148,48 @@ mod tests {
     #[test]
     fn test_on_tick_basic() {
         let mut store = create_test_store();
-        let initial_time = store.time();
-        let target_interval = 200u64;
-        store.on_tick(target_interval, true, false);
-        assert!(store.time() > initial_time);
+        let initial_slot = store.current_slot;
+        store.on_tick(Slot(50), ClockInterval::BlockProposal, true, false);
+        assert!(store.current_slot > initial_slot);
     }
 
     #[test]
     fn test_on_tick_already_current() {
         let mut store = create_test_store();
-        let initial_time = store.time();
-        store.on_tick(initial_time, true, false);
-        assert_eq!(store.time(), initial_time);
+        let initial_slot = store.current_slot;
+        store.on_tick(Slot(0), ClockInterval::BlockProposal, true, false);
+        assert_eq!(store.current_slot, initial_slot);
     }
 
     #[test]
     fn test_tick_interval_basic() {
         let mut store = create_test_store();
-        let initial_time = store.time();
-        store.tick_interval(false, false);
-        assert_eq!(store.time(), initial_time + 1);
+        let initial_slot = store.current_slot;
+        store.tick_interval(ClockInterval::AttestationBroadcast, false, false);
+        assert_eq!(store.current_slot, initial_slot);
     }
 
     #[test]
     fn test_tick_interval_sequence() {
         let mut store = create_test_store();
-        let initial_time = store.time();
-        for i in 0..5 {
-            store.tick_interval(i % 2 == 0, false);
+        for slot in 1..=5u64 {
+            store.on_tick(Slot(slot), ClockInterval::BlockProposal, false, false);
         }
-        assert_eq!(store.time(), initial_time + 5);
+        assert_eq!(store.current_slot, Slot(5));
     }
 
     #[test]
     fn test_tick_interval_actions_by_phase() {
         let mut store = create_test_store();
-        store.set_time(0);
-        for interval in 0..INTERVALS_PER_SLOT {
-            let has_proposal = interval == 0;
-            store.tick_interval(has_proposal, false);
-            let current_interval = store.time() % INTERVALS_PER_SLOT;
-            let expected_interval = (interval + 1) % INTERVALS_PER_SLOT;
-            assert_eq!(current_interval, expected_interval);
+        for interval in [
+            ClockInterval::BlockProposal,
+            ClockInterval::AttestationBroadcast,
+            ClockInterval::SafeTargetUpdate,
+            ClockInterval::AttestationAcceptance,
+        ] {
+            let has_proposal = interval == ClockInterval::BlockProposal;
+            store.on_tick(Slot(1), interval, has_proposal, false);
+            assert_eq!(store.current_slot, Slot(1));
         }
     }
 

@@ -23,13 +23,7 @@
 use containers::{
     AttestationData, Checkpoint, SignedAttestation, SignedBlockWithAttestation, Slot,
 };
-use fork_choice::{
-    handlers::{on_attestation, on_block, on_tick},
-    store::{
-        SECONDS_PER_INTERVAL, SECONDS_PER_SLOT, Store, get_vote_target,
-        produce_block_with_signatures,
-    },
-};
+use fork_choice::Store;
 use tracing::{debug, info, warn};
 
 use crate::{
@@ -151,16 +145,19 @@ impl Service for ChainService {
             // Every interval: advance the store clock only.
             // ValidatorService drives its own duties by sending GetSlotData.
             ServiceInput::Event(Event::Tick(Tick { slot, interval })) => {
-                let genesis_time = self.store.config.genesis_time;
-                let interval_index = u64::from(interval as u8);
-                let current_time =
-                    genesis_time + slot * SECONDS_PER_SLOT + interval_index * SECONDS_PER_INTERVAL;
+                // let genesis_time = self.store.config.genesis_time;
+                // let interval_index = u64::from(interval as u8);
+                // let current_time =
+                //     genesis_time + slot * SECONDS_PER_SLOT + interval_index * SECONDS_PER_INTERVAL;
 
-                on_tick(&mut self.store, current_time, false);
+                // on_tick(&mut self.store, current_time, false);
 
-                debug!(slot, interval = ?interval, store_time = self.store.time, "Chain tick processed");
+                // debug!(slot, interval = ?interval, store_time = self.store.time, "Chain tick processed");
 
-                ServiceOutput::none()
+                // ServiceOutput::none()
+
+                self.store
+                    .on_tick(target_interval, has_proposal, is_aggregator)
             }
 
             // ── Network block flow ───────────────────────────────────────────

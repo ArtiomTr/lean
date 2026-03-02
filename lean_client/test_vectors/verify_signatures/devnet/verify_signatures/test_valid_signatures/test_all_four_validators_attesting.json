@@ -1,0 +1,105 @@
+{
+    "tests/consensus/devnet/verify_signatures/test_valid_signatures.py::test_all_four_validators_attesting[fork_Devnet][fork_devnet-verify_signatures_test]": {
+        "network": "Devnet",
+        "leanEnv": "test",
+        "anchorState": {
+            "config": {
+                "genesisTime": 0
+            },
+            "slot": 0,
+            "latestBlockHeader": {
+                "slot": 0,
+                "proposerIndex": 0,
+                "parentRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "stateRoot": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "bodyRoot": "0xdba9671bac9513c9482f1416a53aabd2c6ce90d5a5f865ce5a55c775325c9136"
+            },
+            "latestJustified": {
+                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "slot": 0
+            },
+            "latestFinalized": {
+                "root": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "slot": 0
+            },
+            "historicalBlockHashes": {
+                "data": []
+            },
+            "justifiedSlots": {
+                "data": []
+            },
+            "validators": {
+                "data": [
+                    {
+                        "pubkey": "0x8fa00001b5b22a073d21cb60c9465b379f80e74fee9baf1d137eb651ed162900a6f3ec32da74ff09265ea62fc9a5055b2e9b7c7b",
+                        "index": 0
+                    },
+                    {
+                        "pubkey": "0xbc56037ab0485c00441e3205d908e55a016d5450a335144f50ccb034cb253c05a1cbc047b5695a5672697d584656e96a4b94f173",
+                        "index": 1
+                    },
+                    {
+                        "pubkey": "0x79422d64ecdc3b0bf7c6cc31bbfb9f4eab7950107fe23c6f4f9c94465c81f80d85a1931f1003c50531147f350357805f22fdd70b",
+                        "index": 2
+                    },
+                    {
+                        "pubkey": "0x575bb17b0f673d76689c9527a21fac68eb5ebd571703a245deb2a8384baea4747be00d5b469ff30f830e234f74453f6e2c20cb26",
+                        "index": 3
+                    }
+                ]
+            },
+            "justificationsRoots": {
+                "data": []
+            },
+            "justificationsValidators": {
+                "data": []
+            }
+        },
+        "signedBlockWithAttestation": {
+            "message": {
+                "block": {
+                    "slot": 1,
+                    "proposerIndex": 1,
+                    "parentRoot": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                    "stateRoot": "0x976e5f2bf6a9b4c51516e650d3a7c7f0066580fa3d1b185808a5bec483292a2f",
+                    "body": {
+                        "attestations": {
+                            "data": []
+                        }
+                    }
+                },
+                "proposerAttestation": {
+                    "validatorId": 1,
+                    "data": {
+                        "slot": 1,
+                        "head": {
+                            "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
+                            "slot": 1
+                        },
+                        "target": {
+                            "root": "0x4d16ec7e8dacf5f60d30ca84cd0a789a022a91ff3dee22975240d617c4236b0d",
+                            "slot": 1
+                        },
+                        "source": {
+                            "root": "0xee3755ec636c6cabd4fbec9791efd12fb38fbad6989e09258a286dcdfa84ca0f",
+                            "slot": 0
+                        }
+                    }
+                }
+            },
+            "signature": {
+                "attestationSignatures": {
+                    "data": []
+                },
+                "proposerSignature": "0x24000000263da07078ffc405da190c28e564ec3376ea1567586e506d09815b6b280100000400000014b70943cd86aa15a53d574d2f8bd91d88b351762d52cc63b253ea301e2aba49ee46c42a2a94e3486ba8bc0ecbb156730e9aad50f311c65523d0064352345c21c1aaf750b2cac76f45bb496b315bf96c2dc3b7652a97e34149c980205634f671ca95a2380654713e9ab2d2607f688a654409973b02062164b8ee6c4e885623713b64bc67ce5afe3f64c56b248f30a8240cbfa74950ee2f0553ed2d05b5bae734dd43270816a33e0d3181970c0d2e4627e8a962536d23f674aca0233c6132fd56b6afb27af66d155bf75ff52250015a044bd51b0766206167f2a47d2dc0a8ab001805333e8eed12701c5a27008597e80f57e91b2716e248727595927a9012122ac28e390b11ab24088effc0281c06fd62f9c2026d48a75300697c24509c10c46c0f36f559277e1d34e193b1391baed97037db1538350d5b286bd22e6c5df4bb35b8275b2558be3c734be57f0bb4145953224d307cfb16e818f32c282bdbd6b13160fdd97c0fa4d02c8477e55afbb4081a3022933f6940107a08d18108dbd0367e"
+            }
+        },
+        "_info": {
+            "hash": "0x86f6a4dbd00dcba7417ba9e1576bfa74f92de8eb8c346e79fb9516f239464403",
+            "comment": "`leanSpec` generated test",
+            "testId": "tests/consensus/devnet/verify_signatures/test_valid_signatures.py::test_all_four_validators_attesting[fork_Devnet]",
+            "description": "Test signature aggregation when all validators attest.\n\n    Scenario\n    --------\n    - Block at slot 1 with 4 validators\n    - Attestations from validators 0, 2, 3 (proposer 1 is implicit)\n\n    Expected Behavior\n    -----------------\n    - All 4 validator signatures are properly aggregated\n    - Verification succeeds for the complete validator set\n\n    Why This Matters\n    ----------------\n    Maximum coverage scenario: all validators participate.\n    This tests aggregation at full capacity for a small validator set.",
+            "fixtureFormat": "verify_signatures_test"
+        }
+    }
+}
