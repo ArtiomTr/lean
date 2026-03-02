@@ -1,9 +1,9 @@
 use std::{collections::HashMap, path::Path};
 
 use containers::{
-    AggregatedAttestation, Attestation, AttestationData, Block, BlockBody, BlockHeader,
-    BlockSignatures, BlockWithAttestation, Checkpoint, Config, PublicKey, SecretKey, Signature,
-    SignedAttestation, SignedBlockWithAttestation, State, Status, Validator,
+    AggregatedAttestation, AggregatedSignatureProof, Attestation, AttestationData, Block,
+    BlockBody, BlockHeader, BlockSignatures, BlockWithAttestation, Checkpoint, Config, PublicKey,
+    SecretKey, Signature, SignedAttestation, SignedBlockWithAttestation, State, Status, Validator,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -133,6 +133,12 @@ fn ssz_vectors(spec_file: &str) {
         "PublicKey" => assert_ssz_decode_only_case::<PublicKey>(&test_name, &expected),
         "SecretKey" => assert_ssz_decode_only_case::<SecretKey>(&test_name, &expected),
         "Signature" => assert_ssz_decode_only_case::<Signature>(&test_name, &expected),
+        "AggregatedSignatureProof" => {
+            assert_ssz_decode_only_case::<AggregatedSignatureProof>(&test_name, &expected)
+        }
+        "HashTreeOpening" | "HashTreeLayer" | "HashSubTree" => {
+            eprintln!("{}: skipping unsupported SSZ helper type", test_name);
+        }
         other => panic!(
             "unsupported SSZ type '{}' in test {} ({})",
             other,

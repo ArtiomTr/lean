@@ -2,15 +2,15 @@ use core::fmt::{self, Display};
 use std::{str::FromStr, sync::Once};
 
 use crate::{PublicKey, Signature};
-use anyhow::{Context, Error, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Error, Result};
 use eth_ssz::{Decode, Encode};
 use ethereum_types::H256;
 use lean_multisig::{
-    Devnet2XmssAggregateSignature, xmss_aggregate_signatures, xmss_aggregation_setup_prover,
-    xmss_aggregation_setup_verifier, xmss_verify_aggregated_signatures,
+    xmss_aggregate_signatures, xmss_aggregation_setup_prover, xmss_aggregation_setup_verifier,
+    xmss_verify_aggregated_signatures, Devnet2XmssAggregateSignature,
 };
-use metrics::{METRICS, stop_and_discard};
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use metrics::{stop_and_discard, METRICS};
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use ssz::{ByteList, Ssz};
 use typenum::U1048576;
 
@@ -26,7 +26,8 @@ type AggregatedSignatureSizeLimit = U1048576;
 ///
 /// todo(xmss): deriving Ssz not particularly good there, as this won't validate
 /// if it actually has valid proof structure, so `.as_lean()` method may panic.
-#[derive(Debug, Clone, Ssz, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Ssz)]
+#[ssz(transparent)]
 pub struct AggregatedSignature(ByteList<AggregatedSignatureSizeLimit>);
 
 fn setup_prover() {

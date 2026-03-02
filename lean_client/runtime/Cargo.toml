@@ -11,6 +11,7 @@ rand = { workspace = true }
 rand_chacha = { workspace = true }
 smallvec = { workspace = true }
 bls = { workspace = true }
+clock = { path = "../clock" }
 containers = { workspace = true }
 enum-iterator = { workspace = true }
 fork_choice = { workspace = true }
