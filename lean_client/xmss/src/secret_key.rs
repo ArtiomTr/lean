@@ -4,7 +4,7 @@ use leansig::{serialization::Serializable, signature::{
     SignatureScheme, generalized_xmss::instantiations_poseidon_top_level::lifetime_2_to_the_32::hashing_optimized::SIGTopLevelTargetSumLifetime32Dim64Base8
 }};
 use rand::Rng;
-use ssz::H256;
+use ssz::{ReadError, Size, SszRead, SszSize, SszWrite, WriteError, H256};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::{PublicKey, Signature};
@@ -62,5 +62,24 @@ impl TryFrom<&[u8]> for SecretKey {
             .map_err(|_| anyhow!("value is not valid secret key"))?;
 
         Ok(Self(value.to_vec()))
+    }
+}
+
+impl SszSize for SecretKey {
+    const SIZE: Size = Size::Variable { minimum_size: 0 };
+}
+
+impl<C> SszRead<C> for SecretKey {
+    fn from_ssz_unchecked(_context: &C, bytes: &[u8]) -> Result<Self, ReadError> {
+        Self::try_from(bytes).map_err(|_| ReadError::Custom {
+            message: "value is not valid secret key",
+        })
+    }
+}
+
+impl SszWrite for SecretKey {
+    fn write_variable(&self, bytes: &mut Vec<u8>) -> Result<(), WriteError> {
+        bytes.extend_from_slice(&self.0);
+        Ok(())
     }
 }

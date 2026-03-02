@@ -104,8 +104,8 @@ pub mod bitlist {
 /// where each signature can be either hex string or structured XMSS format
 pub mod attestation_signatures {
     use super::*;
-    use crate::AggregatedSignatureProof;
     use crate::attestation::AttestationSignatures;
+    use crate::AggregatedSignatureProof;
     use serde::de::Error;
     use ssz::PersistentList;
     use typenum::U4096;
@@ -203,8 +203,8 @@ pub mod byte_list {
 /// where each signature can be either hex string or structured XMSS format
 pub mod aggregated_attestations {
     use super::*;
-    use crate::AggregatedAttestation;
     use crate::attestation::AggregatedAttestations;
+    use crate::AggregatedAttestation;
     use serde::de::Error;
     use ssz::PersistentList;
     use typenum::U4096;

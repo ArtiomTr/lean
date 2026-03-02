@@ -6,6 +6,7 @@
 pub mod block_processing;
 pub mod genesis;
 pub mod runner;
+pub mod ssz_vectors;
 pub mod verify_signatures;
 
 use containers::{Block, SignedBlockWithAttestation, Slot, State};

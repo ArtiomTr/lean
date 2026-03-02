@@ -1,17 +1,17 @@
-use anyhow::{Context, Result, ensure};
+use anyhow::{ensure, Context, Result};
 use metrics::METRICS;
 use serde::{Deserialize, Serialize};
-use ssz::{BitList, H256, PersistentList, Ssz, SszHash};
+use ssz::{BitList, PersistentList, Ssz, SszHash, H256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use try_from_iterator::TryFromIterator;
 use typenum::{Prod, U262144};
 use xmss::{PublicKey, Signature};
 
 use crate::{
-    AggregatedSignatureProof, Attestation, AttestationData, Checkpoint, Config, SignatureKey, Slot,
     attestation::{AggregatedAttestation, AggregatedAttestations, AggregationBits},
     block::{Block, BlockBody, BlockHeader, SignedBlockWithAttestation},
     validator::{Validator, ValidatorRegistryLimit, Validators},
+    AggregatedSignatureProof, Attestation, AttestationData, Checkpoint, Config, SignatureKey, Slot,
 };
 
 type HistoricalRootsLimit = U262144; // 2^18

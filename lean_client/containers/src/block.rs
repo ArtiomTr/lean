@@ -1,8 +1,8 @@
 use crate::{Attestation, Slot, State};
-use anyhow::{Context, Result, ensure};
+use anyhow::{ensure, Context, Result};
 use metrics::METRICS;
 use serde::{Deserialize, Serialize};
-use ssz::{H256, Ssz, SszHash};
+use ssz::{Ssz, SszHash, H256};
 use xmss::Signature;
 
 use crate::attestation::{AggregatedAttestations, AttestationSignatures};

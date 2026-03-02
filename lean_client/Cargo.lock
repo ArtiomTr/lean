@@ -1073,6 +1073,7 @@ name = "containers"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "bls",
  "ethereum-types",
  "hex",
  "metrics",

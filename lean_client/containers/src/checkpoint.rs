@@ -1,6 +1,6 @@
 use crate::Slot;
 use serde::{Deserialize, Serialize};
-use ssz::{H256, Ssz};
+use ssz::{Ssz, H256};
 
 /// Represents a checkpoint in the chain's history.
 ///

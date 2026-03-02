@@ -1,11 +1,11 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use ssz::{BitList, H256, PersistentList, Ssz, SszHash};
+use ssz::{BitList, PersistentList, Ssz, SszHash, H256};
 use std::collections::HashSet;
-use typenum::{U4096, Unsigned as _};
+use typenum::{Unsigned as _, U4096};
 use xmss::{AggregatedSignature, PublicKey, Signature};
 
-use crate::{Checkpoint, Slot, validator::ValidatorRegistryLimit};
+use crate::{validator::ValidatorRegistryLimit, Checkpoint, Slot};
 
 /// List of validator attestations included in a block (without signatures).
 /// Limit is VALIDATOR_REGISTRY_LIMIT (4096).
@@ -162,7 +162,8 @@ pub struct Attestation {
 }
 
 /// Validator attestation bundled with its signature.
-#[derive(Clone, Debug, Ssz, PartialEq)]
+#[derive(Clone, Debug, Ssz, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct SignedAttestation {
     pub validator_id: u64,
     pub message: AttestationData,

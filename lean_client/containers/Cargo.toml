@@ -4,6 +4,7 @@ edition = { workspace = true }
 
 [dependencies]
 anyhow = { workspace = true }
+bls = { workspace = true }
 hex = { workspace = true }
 metrics = { workspace = true }
 ethereum-types = { workspace = true }

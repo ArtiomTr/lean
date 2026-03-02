@@ -9,6 +9,8 @@ mod state;
 mod status;
 mod validator;
 
+use bls as _;
+
 pub use attestation::{
     AggregatedAttestation, AggregatedSignatureProof, AggregatedSignatures, AggregationBits,
     Attestation, AttestationData, Attestations, SignatureKey, SignedAggregatedAttestation,
@@ -27,3 +29,4 @@ pub use state::{
 };
 pub use status::Status;
 pub use validator::{Validator, Validators};
+pub use xmss::{PublicKey, SecretKey, Signature};
