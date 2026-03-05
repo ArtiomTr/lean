@@ -190,6 +190,11 @@ impl<'de> Deserialize<'de> for AggregatedSignature {
         }
 
         let value = DataWrapper::deserialize(deserializer)?;
+        let raw = value.data.strip_prefix("0x").unwrap_or(&value.data);
+
+        if raw.is_empty() {
+            return Ok(Self(ByteList::default()));
+        }
 
         value.data.parse().map_err(de::Error::custom)
     }
