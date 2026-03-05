@@ -2,8 +2,9 @@ use std::{collections::HashMap, path::Path};
 
 use containers::{
     AggregatedAttestation, AggregatedSignatureProof, Attestation, AttestationData, Block,
-    BlockBody, BlockHeader, BlockSignatures, BlockWithAttestation, Checkpoint, Config, PublicKey,
-    SecretKey, Signature, SignedAttestation, SignedBlockWithAttestation, State, Status, Validator,
+    BlockBody, BlockHeader, BlockSignatures, BlockWithAttestation, BlocksByRootRequestV1,
+    Checkpoint, Config, PublicKey, SecretKey, Signature, SignedAttestation,
+    SignedBlockWithAttestation, State, Status, Validator,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -130,6 +131,9 @@ fn ssz_vectors(spec_file: &str) {
         "Validator" => assert_ssz_case!(Validator, &test_name, case.value, &expected),
         "State" => assert_ssz_case!(State, &test_name, case.value, &expected),
         "Status" => assert_ssz_case!(Status, &test_name, case.value, &expected),
+        "BlocksByRootRequest" => {
+            assert_ssz_case!(BlocksByRootRequestV1, &test_name, case.value, &expected)
+        }
         "PublicKey" => assert_ssz_decode_only_case::<PublicKey>(&test_name, &expected),
         "SecretKey" => assert_ssz_decode_only_case::<SecretKey>(&test_name, &expected),
         "Signature" => assert_ssz_decode_only_case::<Signature>(&test_name, &expected),

@@ -3,13 +3,13 @@ use crate::rpc::methods::*;
 use crate::rpc::protocol::{
     ERROR_TYPE_MAX, ERROR_TYPE_MIN, Encoding, ProtocolId, RPCError, SupportedProtocol,
 };
-use containers::SignedBlockWithAttestation;
+use containers::{BlocksByRootRequestV1, SignedBlockWithAttestation};
 // use helper_functions::misc;
 use libp2p::bytes::BufMut;
 use libp2p::bytes::BytesMut;
 use snap::read::FrameDecoder;
 use snap::write::FrameEncoder;
-use ssz::{ContiguousList, DynamicList, SszRead as _, SszReadDefault, SszWrite as _};
+use ssz::{ContiguousList, SszRead as _, SszReadDefault, SszWrite as _};
 use std::io::Cursor;
 use std::io::ErrorKind;
 use std::io::{Read, Write};
@@ -291,7 +291,7 @@ impl Encoder<RequestType> for SSZSnappyOutboundCodec {
                 }
             }
             RequestType::BlocksByRoot(r) => match r {
-                BlocksByRootRequest::V1(req) => req.block_roots.to_ssz()?,
+                BlocksByRootRequest::V1(req) => req.to_ssz()?,
             },
         };
 
@@ -442,14 +442,7 @@ fn handle_rpc_request(
             StatusMessageV1::from_ssz_default(decoded_buffer)?,
         )))),
         SupportedProtocol::BlocksByRootV1 => Ok(Some(RequestType::BlocksByRoot(
-            BlocksByRootRequest::V1(BlocksByRootRequestV1 {
-                block_roots: DynamicList::from_ssz(
-                    // TODO(networking): this constant must be taken from config
-                    //   before production.
-                    &1024,
-                    decoded_buffer,
-                )?,
-            }),
+            BlocksByRootRequest::V1(BlocksByRootRequestV1::from_ssz_default(decoded_buffer)?),
         ))),
     }
 }

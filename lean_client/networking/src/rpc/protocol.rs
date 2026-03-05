@@ -1,5 +1,6 @@
 use super::methods::*;
 use crate::rpc::codec::SSZSnappyInboundCodec;
+use containers::BlocksByRootRequestLimit;
 use futures::future::BoxFuture;
 use futures::prelude::{AsyncRead, AsyncWrite};
 use futures::{FutureExt, StreamExt};
@@ -15,6 +16,7 @@ use tokio_util::{
     codec::Framed,
     compat::{Compat, FuturesAsyncReadCompatExt},
 };
+use typenum::Unsigned;
 
 pub const SIGNED_BEACON_BLOCK_PHASE0_MIN: usize = 404;
 pub const SIGNED_BEACON_BLOCK_PHASE0_MAX: usize = 157756;
@@ -170,11 +172,9 @@ impl ProtocolId {
     pub fn rpc_request_limits(&self) -> RpcLimits {
         match self.versioned_protocol.protocol() {
             Protocol::Status => RpcLimits::fixed(StatusMessageV1::SIZE.get()),
-            Protocol::BlocksByRoot => RpcLimits::new(
-                0,
-                // TODO(networking): 1024 must be moved to constant
-                1024 * H256::SIZE.get(),
-            ),
+            Protocol::BlocksByRoot => {
+                RpcLimits::new(0, BlocksByRootRequestLimit::USIZE * H256::SIZE.get())
+            }
         }
     }
 

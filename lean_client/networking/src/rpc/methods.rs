@@ -3,16 +3,16 @@ use std::fmt::{self, Display};
 
 use crate::types::EnrAttestationBitfield;
 use anyhow::Result;
-use containers::{Checkpoint, SignedBlockWithAttestation};
+use containers::{
+    BlocksByRootRequestLimit, BlocksByRootRequestV1, Checkpoint, SignedBlockWithAttestation,
+};
 use regex::bytes::Regex;
 use serde::Serialize;
-use ssz::{
-    ContiguousList, DynamicList, H256, ReadError, Size, Ssz, SszRead, SszSize, SszWrite, WriteError,
-};
+use ssz::{ContiguousList, H256, ReadError, Size, Ssz, SszRead, SszSize, SszWrite, WriteError};
 use std::{ops::Deref, sync::Arc};
 use strum::IntoStaticStr;
 use try_from_iterator::TryFromIterator as _;
-use typenum::{U256, Unsigned as _};
+use typenum::{U256, Unsigned};
 
 const MAX_REQUEST_LIGHT_CLIENT_UPDATES: u64 = 128;
 
@@ -174,40 +174,30 @@ pub enum BlocksByRootRequest {
     V1(BlocksByRootRequestV1),
 }
 
-/// Request a number of block bodies from a peer.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BlocksByRootRequestV1 {
-    /// The list of block bodies being requested.
-    pub block_roots: DynamicList<H256>,
-}
-
 impl BlocksByRootRequest {
     pub fn new(block_roots: impl Iterator<Item = H256>) -> Self {
-        let block_roots = DynamicList::from_iter_with_maximum(
-            block_roots,
-            // TODO(networking): this place must be fixed before prod
-            1024,
-        );
+        let roots =
+            ContiguousList::try_from_iter(block_roots.take(BlocksByRootRequestLimit::USIZE))
+                .expect("block_roots iterator is capped at BlocksByRootRequestLimit size");
 
-        Self::V1(BlocksByRootRequestV1 { block_roots })
+        Self::V1(BlocksByRootRequestV1 { roots })
     }
 
     pub fn len(&self) -> usize {
         match self {
-            Self::V1(req) => req.block_roots.len(),
+            Self::V1(req) => req.roots.len(),
         }
     }
 
-    pub fn block_roots(self) -> DynamicList<H256> {
+    pub fn block_roots(self) -> ContiguousList<H256, BlocksByRootRequestLimit> {
         match self {
-            Self::V1(req) => req.block_roots,
+            Self::V1(req) => req.roots,
         }
     }
 
     pub fn max_request_blocks(&self) -> u64 {
         match self {
-            // TODO(networking): this place must be fixed before prod
-            Self::V1(_) => 1024,
+            Self::V1(_) => BlocksByRootRequestLimit::U64,
         }
     }
 }
