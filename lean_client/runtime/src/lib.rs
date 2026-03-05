@@ -4,10 +4,8 @@ use bls as _;
 mod chain;
 mod clock;
 mod environment;
-mod event;
 mod network;
 mod node;
-mod service;
 mod simulator;
 mod validator;
 

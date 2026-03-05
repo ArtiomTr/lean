@@ -12,6 +12,7 @@
 //! Currently all effects go to the `NetworkEventSource`; the clock has no effects.
 
 use anyhow::{Error, Result};
+use clock::SystemClock;
 use fork_choice::Store;
 use networking::NetworkConfig;
 use tokio::sync::mpsc;
@@ -19,7 +20,6 @@ use tracing::warn;
 
 use crate::{
     chain::ChainService,
-    clock::SystemClock,
     environment::{Effect, Event, EventSource, Message, Service, ServiceInput},
     network::NetworkEventSource,
     validator::{KeyManager, ValidatorConfig, ValidatorService},

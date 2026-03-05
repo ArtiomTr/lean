@@ -14,21 +14,21 @@
 //! This service never accesses the Store directly. All store interactions
 //! happen through Messages routed via the Node.
 
-use std::path::Path;
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use containers::{
     AggregatedSignatureProof, Attestation, AttestationData, Block, BlockSignatures,
     BlockWithAttestation, SignedAttestation, SignedBlockWithAttestation, Slot,
 };
-use ssz::{H256, PersistentList, SszHash as _};
+use ssz::{PersistentList, SszHash as _, H256};
 use tracing::{debug, info, warn};
 use xmss::{SecretKey, Signature};
 
+use clock::{Interval, Tick};
+
 use crate::{
     chain::ChainMessage,
-    clock::{Interval, Tick},
     environment::{Effect, Event, Service, ServiceInput, ServiceOutput},
     network::NetworkEffect,
 };

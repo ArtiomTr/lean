@@ -2,20 +2,15 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
-use chain::SlotClock;
+use clock::{Interval, SystemClock};
 use containers::{
-    Attestation, AttestationData, Block, BlockSignatures, BlockWithAttestation, Checkpoint,
-    SignedAttestation, SignedBlockWithAttestation, Slot,
+    Attestation, AttestationData, BlockSignatures, BlockWithAttestation, SignedAttestation,
+    SignedBlockWithAttestation, Slot,
 };
-use fork_choice::{
-    handlers::{on_attestation, on_block},
-    store::{Store, get_vote_target, produce_block_with_signatures},
-};
+use fork_choice::Store;
 use metrics::METRICS;
-use networking::types::OutboundP2pRequest;
 use ssz::SszHash;
-use tokio::sync::mpsc;
-use tokio::time::{Duration, sleep};
+use tokio::time::sleep;
 use tracing::{debug, info, warn};
 use xmss::Signature;
 
@@ -36,10 +31,7 @@ pub struct ValidatorService {
     store: Arc<RwLock<Store>>,
 
     /// Slot clock for time calculation
-    clock: SlotClock,
-
-    /// Channel for sending outbound P2P requests (blocks and attestations)
-    outbound_sender: mpsc::UnboundedSender<OutboundP2pRequest>,
+    clock: SystemClock,
 
     /// Key manager for signing (optional - if None, uses zero signatures)
     key_manager: Option<KeyManager>,
@@ -61,8 +53,7 @@ impl ValidatorService {
         config: ValidatorConfig,
         num_validators: u64,
         store: Arc<RwLock<Store>>,
-        clock: SlotClock,
-        outbound_sender: mpsc::UnboundedSender<OutboundP2pRequest>,
+        clock: SystemClock,
         key_manager: Option<KeyManager>,
     ) -> Self {
         info!(
@@ -84,7 +75,6 @@ impl ValidatorService {
             num_validators,
             store,
             clock,
-            outbound_sender,
             key_manager,
             running: Arc::new(AtomicBool::new(false)),
             blocks_produced: Arc::new(AtomicU64::new(0)),
@@ -110,6 +100,11 @@ impl ValidatorService {
         info!("ValidatorService started");
 
         while self.running.load(Ordering::SeqCst) {
+            if self.clock.checked_current_slot().is_none() {
+                self.sleep_until_next_interval().await;
+                continue;
+            }
+
             // Get current total interval count (not just within-slot)
             let total_interval = self.clock.total_intervals();
 
@@ -150,20 +145,20 @@ impl ValidatorService {
             let interval = self.clock.current_interval();
 
             match interval {
-                0 => {
+                Interval::BlockProposal => {
                     // Block production interval
                     //
                     // Check if any of our validators is the proposer
                     self.maybe_produce_block(slot).await;
                 }
-                1 => {
+                Interval::AttestationBroadcast => {
                     // Attestation interval
                     //
                     // All validators should attest to current head
                     self.produce_attestations(slot).await;
                 }
                 _ => {
-                    // Intervals 2-3 have no validator duties
+                    // Remaining intervals have no validator duties
                 }
             }
 
@@ -205,27 +200,26 @@ impl ValidatorService {
         let signed_block = {
             let mut store = self.store.write().expect("Store lock poisoned");
 
-            match produce_block_with_signatures(&mut store, Slot(slot), proposer_index) {
+            match store.produce_block_with_signatures(Slot(slot), proposer_index) {
                 Ok((block_root, block, signatures)) => {
                     // Create proposer attestation
-                    let proposer_attestation_data = get_vote_target(&store);
-                    let head_block = store
-                        .blocks
-                        .get(&store.head)
-                        .expect("Head block must exist");
-                    let head_checkpoint = Checkpoint {
-                        root: store.head,
-                        slot: head_block.slot,
+                    let proposer_attestation_data = match store.produce_attestation_data(Slot(slot))
+                    {
+                        Ok(data) => data,
+                        Err(e) => {
+                            warn!(
+                                slot = slot,
+                                proposer = proposer_index,
+                                error = %e,
+                                "Failed to create proposer attestation data"
+                            );
+                            return;
+                        }
                     };
 
                     let proposer_attestation = Attestation {
                         validator_id: proposer_index,
-                        data: AttestationData {
-                            slot: Slot(slot),
-                            head: head_checkpoint,
-                            target: proposer_attestation_data,
-                            source: store.latest_justified.clone(),
-                        },
+                        data: proposer_attestation_data,
                     };
 
                     // Sign the proposer attestation
@@ -280,7 +274,7 @@ impl ValidatorService {
             // Process our own block
             {
                 let mut store = self.store.write().expect("Store lock poisoned");
-                match on_block(&mut store, signed_block.clone()) {
+                match store.on_block(signed_block.clone()) {
                     Ok(()) => {
                         info!("Own block processed successfully");
                     }
@@ -300,7 +294,7 @@ impl ValidatorService {
                     signature: signed_block.signature.proposer_signature.clone(),
                 };
 
-                if let Err(e) = on_attestation(&mut store, proposer_attestation, false) {
+                if let Err(e) = store.on_gossip_attestation(&proposer_attestation, false) {
                     warn!(error = %e, "Failed to process proposer attestation");
                 }
             }
@@ -310,13 +304,7 @@ impl ValidatorService {
             // TODO: Add blocks_proposed metric
             // METRICS.get().map(|m| m.blocks_proposed.inc());
 
-            // Gossip the block
-            if let Err(e) = self
-                .outbound_sender
-                .send(OutboundP2pRequest::GossipBlockWithAttestation(signed_block))
-            {
-                warn!(error = %e, "Failed to gossip block");
-            }
+            let _ = signed_block;
         }
     }
 
@@ -336,26 +324,16 @@ impl ValidatorService {
         let (attestation_data, validator_indices) = {
             let store = self.store.read().expect("Store lock poisoned");
 
-            let vote_target = get_vote_target(&store);
-
-            let head_block = match store.blocks.get(&store.head) {
-                Some(b) => b,
-                None => {
-                    warn!("Head block not found, skipping attestations");
+            let data = match store.produce_attestation_data(Slot(slot)) {
+                Ok(data) => data,
+                Err(e) => {
+                    warn!(
+                        slot = slot,
+                        error = %e,
+                        "Failed to produce attestation data, skipping attestations"
+                    );
                     return;
                 }
-            };
-
-            let head_checkpoint = Checkpoint {
-                root: store.head,
-                slot: head_block.slot,
-            };
-
-            let data = AttestationData {
-                slot: Slot(slot),
-                head: head_checkpoint,
-                target: vote_target,
-                source: store.latest_justified.clone(),
             };
 
             // Collect our validator indices, skipping the proposer
@@ -383,7 +361,7 @@ impl ValidatorService {
             // Process our own attestation
             {
                 let mut store = self.store.write().expect("Store lock poisoned");
-                if let Err(e) = on_attestation(&mut store, signed_attestation.clone(), false) {
+                if let Err(e) = store.on_gossip_attestation(&signed_attestation, false) {
                     warn!(
                         validator = validator_index,
                         error = %e,
@@ -398,23 +376,11 @@ impl ValidatorService {
             // TODO: Add attestations_produced metric
             // METRICS.get().map(|m| m.attestations_produced.inc());
 
-            // Gossip the attestation
-            if let Err(e) = self
-                .outbound_sender
-                .send(OutboundP2pRequest::GossipAttestation(signed_attestation))
-            {
-                warn!(
-                    validator = validator_index,
-                    error = %e,
-                    "Failed to gossip attestation"
-                );
-            } else {
-                info!(
-                    slot = slot,
-                    validator = validator_index,
-                    "Attestation produced and gossiped"
-                );
-            }
+            info!(
+                slot = slot,
+                validator = validator_index,
+                "Attestation produced"
+            );
         }
     }
 
@@ -456,9 +422,9 @@ impl ValidatorService {
     ///
     /// Uses the clock to calculate precise sleep duration.
     async fn sleep_until_next_interval(&self) {
-        let sleep_time = self.clock.seconds_until_next_interval();
-        if sleep_time > 0.0 {
-            sleep(Duration::from_secs_f64(sleep_time)).await;
+        let sleep_time = self.clock.time_until_next_interval();
+        if !sleep_time.is_zero() {
+            sleep(sleep_time).await;
         }
     }
 

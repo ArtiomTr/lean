@@ -4,6 +4,8 @@ edition = { workspace = true }
 
 [dependencies]
 anyhow = { workspace = true }
+clock = { workspace = true }
+containers = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 fork_choice = { path = "../fork_choice" }

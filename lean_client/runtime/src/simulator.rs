@@ -36,16 +36,21 @@
 //! let effects = sim.drain_effects();
 //! ```
 
-use std::collections::VecDeque;
+use std::{collections::VecDeque, sync::Arc};
 
+use containers::{
+    AggregatedSignatureProof, AggregationBits, SignedAggregatedAttestation, SignedAttestation,
+};
 use fork_choice::Store;
 use rand::Rng as _;
-use rand_chacha::{ChaCha8Rng, rand_core::SeedableRng as _};
+use rand_chacha::{rand_core::SeedableRng as _, ChaCha8Rng};
+use ssz::SszHash as _;
 use tracing::warn;
 
 use crate::{
     chain::{ChainMessage, ChainService},
     environment::{Effect, Event, Message, Service, ServiceInput, ServiceOutput},
+    network::{NetworkEffect, NetworkEvent},
     validator::{KeyManager, ValidatorConfig, ValidatorMessage, ValidatorService},
 };
 
@@ -54,6 +59,182 @@ use crate::{
 pub enum ServiceId {
     Chain,
     Validator,
+}
+
+/// Effect emitted by a specific node in a simulated cluster.
+#[derive(Debug, Clone)]
+pub struct NodeEffect {
+    pub node_index: usize,
+    pub effect: Effect,
+}
+
+/// Deterministic multi-node simulator.
+///
+/// This orchestrates multiple [`Simulator`] instances and routes network
+/// effects between nodes:
+///
+/// - `PublishBlock` / `PublishAttestation` are broadcast to all *other* nodes
+///   as `Event::Network`.
+/// - `RequestBlocksByRoot` is currently recorded as an effect but not
+///   auto-fulfilled.
+#[derive(Clone)]
+pub struct ClusterSimulator {
+    nodes: Vec<Simulator>,
+    effects: Vec<NodeEffect>,
+    rng: ChaCha8Rng,
+}
+
+impl ClusterSimulator {
+    /// Create a multi-node simulator with the built-in default seed.
+    pub fn new(nodes: Vec<Simulator>) -> Self {
+        Self::with_seed(nodes, 0)
+    }
+
+    /// Create a multi-node simulator with a specific seed.
+    pub fn with_seed(nodes: Vec<Simulator>, seed: u64) -> Self {
+        Self {
+            nodes,
+            effects: Vec::new(),
+            rng: ChaCha8Rng::seed_from_u64(seed),
+        }
+    }
+
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub fn store(&self, node_index: usize) -> &Store {
+        self.nodes[node_index].store()
+    }
+
+    /// Returns `true` if at least one node has pending service inputs.
+    pub fn has_pending(&self) -> bool {
+        self.nodes.iter().any(Simulator::has_pending)
+    }
+
+    /// Which node indices currently have pending service inputs.
+    pub fn decisions(&self) -> Vec<usize> {
+        self.nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, node)| node.has_pending().then_some(idx))
+            .collect()
+    }
+
+    /// Broadcast an event to every node.
+    pub fn push_event(&mut self, event: Event) {
+        for node in &mut self.nodes {
+            node.push_event(event.clone());
+        }
+    }
+
+    /// Process one pending item from one randomly selected node.
+    ///
+    /// Returns the selected node index, or `None` when all nodes are idle.
+    pub fn step(&mut self) -> Option<usize> {
+        let decisions = self.decisions();
+        if decisions.is_empty() {
+            return None;
+        }
+
+        let idx = self.rng.random_range(0..decisions.len());
+        let node_index = decisions[idx];
+
+        self.nodes[node_index]
+            .step()
+            .expect("chosen node has pending items");
+
+        let produced_effects = self.nodes[node_index].drain_effects();
+        for effect in produced_effects {
+            self.route_effect(node_index, &effect);
+            self.effects.push(NodeEffect { node_index, effect });
+        }
+
+        Some(node_index)
+    }
+
+    /// Runs at most `max_steps` steps, stopping early when idle.
+    ///
+    /// Returns `true` if the cluster became idle before reaching `max_steps`.
+    pub fn run_until_idle(&mut self, max_steps: usize) -> bool {
+        for _ in 0..max_steps {
+            if self.step().is_none() {
+                return true;
+            }
+        }
+
+        !self.has_pending()
+    }
+
+    /// Take all node effects accumulated since the last call.
+    pub fn drain_effects(&mut self) -> Vec<NodeEffect> {
+        std::mem::take(&mut self.effects)
+    }
+
+    fn route_effect(&mut self, source_node: usize, effect: &Effect) {
+        match effect {
+            Effect::Network(NetworkEffect::PublishBlock(block)) => {
+                for (node_index, node) in self.nodes.iter_mut().enumerate() {
+                    if node_index == source_node {
+                        continue;
+                    }
+                    node.push_event(Event::Network(NetworkEvent::GossipBlock(block.clone())));
+                }
+            }
+            Effect::Network(NetworkEffect::PublishAttestation(attestation)) => {
+                let aggregated = self
+                    .single_signature_aggregate(source_node, attestation.as_ref())
+                    .map(Arc::new);
+
+                for (node_index, node) in self.nodes.iter_mut().enumerate() {
+                    if node_index == source_node {
+                        continue;
+                    }
+                    node.push_event(Event::Network(NetworkEvent::GossipAttestation(
+                        attestation.clone(),
+                    )));
+
+                    if let Some(aggregated) = &aggregated {
+                        node.push_event(Event::Network(NetworkEvent::GossipAggregatedAttestation(
+                            aggregated.clone(),
+                        )));
+                    }
+                }
+            }
+            Effect::Network(NetworkEffect::RequestBlocksByRoot(_)) => {}
+        }
+    }
+
+    fn single_signature_aggregate(
+        &self,
+        source_node: usize,
+        attestation: &SignedAttestation,
+    ) -> Option<SignedAggregatedAttestation> {
+        let state = self
+            .nodes
+            .get(source_node)?
+            .store()
+            .states()
+            .get(&attestation.message.target.root)?;
+
+        let validator = state.validators.get(attestation.validator_id).ok()?;
+        let participants = AggregationBits::from_validator_indices(&[attestation.validator_id]);
+        let data_root = attestation.message.hash_tree_root();
+
+        let proof = AggregatedSignatureProof::aggregate(
+            participants,
+            [validator.pubkey.clone()],
+            [attestation.signature.clone()],
+            data_root,
+            attestation.message.slot.0 as u32,
+        )
+        .ok()?;
+
+        Some(SignedAggregatedAttestation {
+            data: attestation.message.clone(),
+            proof,
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -189,5 +370,130 @@ impl Simulator {
     /// Take all effects accumulated since the last call.
     pub fn drain_effects(&mut self) -> Vec<Effect> {
         std::mem::take(&mut self.effects)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use clock::{Interval, Tick};
+    use containers::{Block, BlockBody, Slot, State, Validator};
+    use rand_chacha::rand_core::SeedableRng as _;
+    use ssz::{SszHash as _, SszWrite as _, H256};
+    use tempfile::TempDir;
+    use xmss::SecretKey;
+
+    use super::*;
+
+    const NODE_COUNT: u64 = 3;
+    const SLOTS_TO_SIMULATE: u64 = 12;
+    const MAX_STEPS_PER_TICK: usize = 200_000;
+
+    #[test]
+    fn three_simulated_nodes_finalize_chain() {
+        std::thread::Builder::new()
+            .name("simulator-finalization".to_string())
+            .stack_size(64 * 1024 * 1024)
+            .spawn(run_three_simulated_nodes_finalize_chain)
+            .expect("simulation thread should start")
+            .join()
+            .expect("simulation thread should not panic");
+    }
+
+    fn run_three_simulated_nodes_finalize_chain() {
+        let (validators, keys_dir) = generate_validators_and_keys(NODE_COUNT);
+
+        let nodes = (0..NODE_COUNT)
+            .map(|validator_index| {
+                create_node_simulator(keys_dir.path(), &validators, validator_index)
+            })
+            .collect();
+
+        let mut cluster = ClusterSimulator::with_seed(nodes, 11);
+
+        for slot in 1..=SLOTS_TO_SIMULATE {
+            for interval in [
+                Interval::BlockProposal,
+                Interval::AttestationBroadcast,
+                Interval::Aggregation,
+                Interval::SafeTargetUpdate,
+                Interval::AttestationAcceptance,
+            ] {
+                cluster.push_event(Event::Tick(Tick::new(slot, interval)));
+                assert!(
+                    cluster.run_until_idle(MAX_STEPS_PER_TICK),
+                    "cluster did not become idle after slot {slot} / interval {interval:?}",
+                );
+            }
+        }
+
+        for node_index in 0..cluster.node_count() {
+            let finalized_slot = cluster.store(node_index).latest_finalized().slot;
+            assert!(
+                finalized_slot > Slot(0),
+                "node {node_index} did not finalize (latest finalized slot: {})",
+                finalized_slot.0,
+            );
+        }
+    }
+
+    fn generate_validators_and_keys(count: u64) -> (Vec<Validator>, TempDir) {
+        let key_dir = tempfile::tempdir().expect("temporary key directory should be created");
+        let mut rng = ChaCha8Rng::seed_from_u64(999);
+        let mut validators = Vec::with_capacity(count as usize);
+
+        for validator_index in 0..count {
+            let (public_key, secret_key) = SecretKey::generate_key_pair(&mut rng, 0, 32);
+
+            validators.push(Validator {
+                pubkey: public_key,
+                index: validator_index,
+            });
+
+            let key_path = key_dir
+                .path()
+                .join(format!("validator_{validator_index}_sk.ssz"));
+            let bytes = secret_key
+                .to_ssz()
+                .expect("validator secret key should serialize");
+
+            std::fs::write(&key_path, bytes)
+                .expect("validator secret key should be written to disk");
+        }
+
+        (validators, key_dir)
+    }
+
+    fn create_node_simulator(
+        key_dir: &Path,
+        validators: &[Validator],
+        validator_index: u64,
+    ) -> Simulator {
+        let state = State::generate_genesis_with_validators(1_000, validators.to_vec());
+        let genesis_block = Block {
+            slot: Slot(0),
+            proposer_index: 0,
+            parent_root: H256::zero(),
+            state_root: state.hash_tree_root(),
+            body: BlockBody::default(),
+        };
+
+        let store = Store::new(state, genesis_block, Some(validator_index))
+            .expect("simulator store init should succeed");
+
+        let validator_config = ValidatorConfig {
+            validator_indices: vec![validator_index],
+        };
+
+        let key_manager = KeyManager::load(key_dir, &[validator_index])
+            .expect("validator key should load successfully");
+
+        Simulator::with_seed(
+            store,
+            Some(validator_config),
+            Some(key_manager),
+            validator_index + 1,
+        )
     }
 }

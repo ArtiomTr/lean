@@ -1,11 +1,12 @@
 //! Chain service that drives the consensus clock and owns the fork choice store.
 //!
-//! Every 4 seconds (1 slot), the forkchoice store processes 4 intervals:
+//! Every 4 seconds (1 slot), the forkchoice store processes 5 intervals:
 //!
 //! - Interval 0: Block proposal window
 //! - Interval 1: Attestation broadcast window
-//! - Interval 2: Safe target update
-//! - Interval 3: Accept new attestations into fork choice
+//! - Interval 2: Aggregation window
+//! - Interval 3: Safe target update
+//! - Interval 4: Accept new attestations into fork choice
 //!
 //! The `ChainService` is the heartbeat. It receives tick events, advances the
 //! store, and notifies other services of the current state via Messages.
@@ -20,16 +21,16 @@
 //! is not yet in the store, it emits `Effect::Network(NetworkEffect::RequestBlocksByRoot)` so the
 //! `NetworkEventSource` can fetch the missing ancestor from peers.
 
+use anyhow::Result;
+use clock::{Interval, Tick};
 use containers::{
-    AttestationData, Checkpoint, SignedAttestation, SignedBlockWithAttestation, Slot,
+    AttestationData, SignedAggregatedAttestation, SignedAttestation, SignedBlockWithAttestation,
+    Slot,
 };
 use fork_choice::Store;
 use tracing::{debug, info, warn};
 
-use clock::Interval as ClockInterval;
-
 use crate::{
-    clock::{Interval, Tick},
     environment::{Effect, Event, NetworkEvent, Service, ServiceInput, ServiceOutput},
     network::NetworkEffect,
     validator::ValidatorMessage,
@@ -72,19 +73,8 @@ impl ChainService {
     ///
     /// Per spec: head checkpoint from current head, target from
     /// `get_vote_target`, source from `latest_justified`.
-    fn attestation_data(&self, slot: Slot) -> AttestationData {
-        let head_block = &self.store.blocks()[&self.store.head()];
-        let head_checkpoint = Checkpoint {
-            root: self.store.head(),
-            slot: head_block.slot,
-        };
-
-        AttestationData {
-            slot,
-            head: head_checkpoint,
-            target: self.store.get_attestation_target(),
-            source: self.store.latest_justified().clone(),
-        }
+    fn attestation_data(&self, slot: Slot) -> Result<AttestationData> {
+        self.store.produce_attestation_data(slot)
     }
 
     /// Process a block from the network and return any required effects.
@@ -135,6 +125,17 @@ impl ChainService {
         }
         ServiceOutput::none()
     }
+
+    fn process_network_aggregated_attestation(
+        &mut self,
+        attestation: SignedAggregatedAttestation,
+    ) -> ServiceOutput {
+        let participants = attestation.proof.get_participant_indices().len();
+        if let Err(err) = self.store.on_gossip_aggregated_attestation(&attestation) {
+            warn!(%err, participants, "Failed to process network aggregated attestation");
+        }
+        ServiceOutput::none()
+    }
 }
 
 impl Service for ChainService {
@@ -158,13 +159,9 @@ impl Service for ChainService {
 
                 // ServiceOutput::none()
 
-                let clock_interval = match interval {
-                    Interval::BlockProposal => ClockInterval::BlockProposal,
-                    Interval::AttestationBroadcast => ClockInterval::AttestationBroadcast,
-                    Interval::SafeTargetUpdate => ClockInterval::SafeTargetUpdate,
-                    Interval::AttestationAcceptance => ClockInterval::AttestationAcceptance,
-                };
-                self.store.on_tick(Slot(slot), clock_interval, false, false);
+                if let Err(err) = self.store.on_tick(Slot(slot), interval, false, false) {
+                    warn!(%err, slot, interval = ?interval, "Failed to advance forkchoice tick");
+                }
                 ServiceOutput::none()
             }
 
@@ -186,10 +183,9 @@ impl Service for ChainService {
             // ── Network aggregated attestation flow ───────────────────────────
             //
             // A peer gossiped an aggregated attestation.
-            ServiceInput::Event(Event::Network(NetworkEvent::GossipAggregatedAttestation(_))) => {
-                // TODO: Handle aggregated attestations
-                ServiceOutput::none()
-            }
+            ServiceInput::Event(Event::Network(NetworkEvent::GossipAggregatedAttestation(
+                attestation,
+            ))) => self.process_network_aggregated_attestation(attestation.as_ref().clone()),
 
             // ── RPC status request flow ────────────────────────────────────────
             //
@@ -220,11 +216,19 @@ impl Service for ChainService {
                     .map(|s| s.validators.len_u64())
                     .unwrap_or(0);
 
+                let attestation_data = match self.attestation_data(slot) {
+                    Ok(data) => data,
+                    Err(err) => {
+                        warn!(%err, slot = slot.0, interval = ?interval, "Failed to build attestation data");
+                        return ServiceOutput::none();
+                    }
+                };
+
                 ServiceOutput::validator_message(ValidatorMessage::SlotData {
                     slot,
                     interval,
                     num_validators,
-                    attestation_data: self.attestation_data(slot),
+                    attestation_data,
                 })
             }
 
@@ -249,7 +253,13 @@ impl Service for ChainService {
                             block,
                             block_root,
                             signatures,
-                            attestation_data: self.attestation_data(slot),
+                            attestation_data: match self.attestation_data(slot) {
+                                Ok(data) => data,
+                                Err(err) => {
+                                    warn!(%err, slot = slot.0, "Failed to build attestation data for produced block");
+                                    return ServiceOutput::none();
+                                }
+                            },
                         })
                     }
                     Err(err) => {

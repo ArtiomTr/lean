@@ -5,11 +5,11 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Error, Result, anyhow};
+use anyhow::{anyhow, Result};
 use enum_iterator::Sequence;
 use strum::FromRepr;
-use tokio::{sync::mpsc, time::Instant};
-use tokio_stream::{Stream, StreamExt, wrappers::IntervalStream};
+use tokio::time::Instant;
+use tokio_stream::{wrappers::IntervalStream, Stream, StreamExt};
 
 /// NOTE: if this ever becomes a fractional number of seconds (i.e. 2.5, 0.5,
 /// etc.), don't forget to update `current_slot` functionality too.
@@ -26,7 +26,7 @@ const SLOT_DURATION: Duration = Duration::from_secs(4);
 ///
 /// TODO(rust-update): check if [#143874] is stabilized, when upgrading from
 /// 1.92.0.
-const DURATION_PER_INTERVAL: Duration = Duration::from_secs(1);
+const DURATION_PER_INTERVAL: Duration = Duration::from_millis(800);
 
 pub type Slot = u64;
 
@@ -65,6 +65,7 @@ impl Tick {
 pub enum Interval {
     BlockProposal,
     AttestationBroadcast,
+    Aggregation,
     SafeTargetUpdate,
     AttestationAcceptance,
 }
@@ -115,6 +116,51 @@ impl SystemClock {
         self.0
     }
 
+    pub fn checked_current_slot(&self) -> Option<Slot> {
+        Clock::checked_current_slot(self)
+    }
+
+    pub fn current_slot(&self) -> Slot {
+        self.checked_current_slot().unwrap_or_default()
+    }
+
+    pub fn checked_current_interval(&self) -> Option<Interval> {
+        Clock::checked_current_interval(self)
+    }
+
+    pub fn current_interval(&self) -> Interval {
+        self.checked_current_interval()
+            .unwrap_or(Interval::BlockProposal)
+    }
+
+    pub fn total_intervals(&self) -> u64 {
+        self.time_since_genesis()
+            .map(|elapsed| {
+                let total = elapsed.as_millis() / DURATION_PER_INTERVAL.as_millis();
+                total.min(u128::from(u64::MAX)) as u64
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn time_until_next_interval(&self) -> Duration {
+        if let Ok(until_genesis) = self.genesis_time().duration_since(SystemTime::now()) {
+            return until_genesis;
+        }
+
+        let Some(elapsed) = self.time_since_genesis() else {
+            return Duration::ZERO;
+        };
+
+        let interval_nanos = DURATION_PER_INTERVAL.as_nanos();
+        let remainder = elapsed.as_nanos() % interval_nanos;
+
+        if remainder == 0 {
+            Duration::ZERO
+        } else {
+            Duration::from_nanos((interval_nanos - remainder) as u64)
+        }
+    }
+
     pub fn ticks(&self) -> Result<impl Stream<Item = Result<Tick>> + use<>> {
         let now_instant = Instant::now();
         let now_system_time = SystemTime::now();
@@ -128,7 +174,7 @@ impl SystemClock {
                 .as_secs(),
         )?;
 
-        let interval = tokio::time::interval_at(next_instant.into(), SLOT_DURATION);
+        let interval = tokio::time::interval_at(next_instant.into(), DURATION_PER_INTERVAL);
 
         Ok(IntervalStream::new(interval).map(move |_| {
             let current_tick = next_tick;
@@ -193,7 +239,7 @@ impl Clock for SystemClock {
 mod tests {
     use enum_iterator::Sequence;
 
-    use crate::{DURATION_PER_INTERVAL, Interval, SLOT_DURATION};
+    use crate::{Interval, DURATION_PER_INTERVAL, SLOT_DURATION};
 
     #[test]
     fn configuration_is_valid() {

@@ -223,6 +223,7 @@ private_intra_doc_links = 'allow'
 
 [workspace.dependencies]
 chain = { path = "./chain" }
+clock = { path = "./clock" }
 containers = { path = "./containers" }
 fork_choice = { path = "./fork_choice" }
 grandine_version = { path = "./grandine_version" }

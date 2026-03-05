@@ -1,26 +1,26 @@
 use std::{
-    sync::{Arc, atomic::AtomicU64},
-    task::Context,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use anyhow::Result;
 use containers::{
-    AggregatedAttestation, ForkDigest, SignedAggregatedAttestation, SignedAttestation,
-    SignedBlockWithAttestation,
+    ForkDigest, SignedAggregatedAttestation, SignedAttestation, SignedBlockWithAttestation,
 };
+use fork_choice::ATTESTATION_COMMITTEE_COUNT;
 use futures::FutureExt as _;
 use libp2p_identity::Keypair;
 use networking::{
-    BlocksByRootRequest, EnrForkId, InboundRequestId, Network, PubsubMessage, RequestType,
-    StatusMessage, TaskExecutor,
+    AppRequestId, BlocksByRootRequest, EnrForkId, InboundRequestId, Network, NetworkConfig,
+    PubsubMessage, RequestType, Response, ServiceContext, StatusMessage, TaskExecutor,
 };
-use networking::{NetworkConfig, NetworkEvent as InnerNetworkEvent, ServiceContext};
 use ssz::H256;
-use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use tokio_stream::wrappers::IntervalStream;
+use tokio::sync::mpsc;
 use tracing::error;
 
-use crate::environment::{Effect, EventSource};
+use crate::environment::EventSource;
 
 /// A block or attestation received from the P2P network.
 ///
@@ -80,7 +80,7 @@ impl EventSource for NetworkEventSource {
         event_tx: mpsc::UnboundedSender<Self::Event>,
         mut effect_rx: mpsc::UnboundedReceiver<Self::Effect>,
     ) -> Result<()> {
-        let (shutdown_tx, shutdown_rx) = futures::channel::mpsc::channel(128);
+        let (shutdown_tx, _shutdown_rx) = futures::channel::mpsc::channel(128);
 
         let executor = TaskExecutor::new(shutdown_tx);
 
@@ -95,11 +95,12 @@ impl EventSource for NetworkEventSource {
 
         let (mut network, globals) =
             Network::new(executor, context, Keypair::generate_ed25519()).await?;
+        let request_id = AtomicUsize::new(0);
 
         tokio::spawn(async move {
-            let handle_network_event = |event: InnerNetworkEvent| -> Result<()> {
+            let handle_network_event = |event: networking::NetworkEvent| -> Result<()> {
                 match event {
-                    InnerNetworkEvent::PubsubMessage { message, .. } => match message {
+                    networking::NetworkEvent::PubsubMessage { message, .. } => match message {
                         PubsubMessage::Attestation(_, attestation) => {
                             event_tx.send(NetworkEvent::GossipAttestation(attestation))?;
                         }
@@ -110,13 +111,13 @@ impl EventSource for NetworkEventSource {
                             event_tx.send(NetworkEvent::GossipAggregatedAttestation(att))?;
                         }
                     },
-                    InnerNetworkEvent::RequestReceived {
+                    networking::NetworkEvent::RequestReceived {
                         inbound_request_id,
                         request_type,
                         ..
                     } => match request_type {
                         RequestType::Status(req) => {
-                            event_tx.send(NetworkEvent::RpcStatusRequest(inbound_request_id, req));
+                            event_tx.send(NetworkEvent::RpcStatusRequest(inbound_request_id, req))?;
                         }
                         RequestType::BlocksByRoot(req) => {
                             event_tx.send(NetworkEvent::RpcBlocksByRootsRequest(
@@ -125,6 +126,11 @@ impl EventSource for NetworkEventSource {
                             ))?;
                         }
                     },
+                    networking::NetworkEvent::ResponseReceived { response, .. } => {
+                        if let Response::BlocksByRoot(Some(block)) = response {
+                            event_tx.send(NetworkEvent::GossipBlock(block))?;
+                        }
+                    }
                     _ => {
                         // currently, we're not interested in any other events.
                     }
@@ -136,11 +142,62 @@ impl EventSource for NetworkEventSource {
             loop {
                 tokio::select! {
                     network_event = network.next_event().fuse() => {
-                        let _ = handle_network_event(network_event);
+                        if let Err(error) = handle_network_event(network_event) {
+                            error!(?error, "failed to process incoming network event");
+                        }
                     }
 
                     effect = effect_rx.recv() => {
+                        let Some(effect) = effect else {
+                            break;
+                        };
 
+                        match effect {
+                            NetworkEffect::PublishBlock(block) => {
+                                network.publish(PubsubMessage::Block(block));
+                            }
+                            NetworkEffect::PublishAttestation(attestation) => {
+                                let subnet_id =
+                                    attestation.validator_id % ATTESTATION_COMMITTEE_COUNT;
+                                network
+                                    .publish(PubsubMessage::Attestation(subnet_id, attestation));
+                            }
+                            NetworkEffect::RequestBlocksByRoot(block_roots) => {
+                                if block_roots.is_empty() {
+                                    continue;
+                                }
+
+                                let Some(peer_id) = globals
+                                    .peers
+                                    .read()
+                                    .connected_peer_ids()
+                                    .next()
+                                    .cloned()
+                                else {
+                                    error!("no connected peer available for blocks-by-root request");
+                                    continue;
+                                };
+
+                                let request =
+                                    RequestType::BlocksByRoot(BlocksByRootRequest::new(
+                                        block_roots.into_iter(),
+                                    ));
+
+                                let app_request_id = AppRequestId::Application(
+                                    request_id.fetch_add(1, Ordering::Relaxed),
+                                );
+
+                                if let Err((_, err)) =
+                                    network.send_request(peer_id, app_request_id, request)
+                                {
+                                    error!(
+                                        %peer_id,
+                                        ?err,
+                                        "failed to send blocks-by-root request",
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
             }

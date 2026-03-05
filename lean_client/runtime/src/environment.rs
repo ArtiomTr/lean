@@ -12,7 +12,9 @@ use tracing::Span;
 
 pub use crate::network::{NetworkEffect, NetworkEvent};
 
-use crate::{chain::ChainMessage, clock::Tick, validator::ValidatorMessage};
+use clock::Tick;
+
+use crate::{chain::ChainMessage, validator::ValidatorMessage};
 
 /// Events from non-deterministic sources (EventSources).
 ///

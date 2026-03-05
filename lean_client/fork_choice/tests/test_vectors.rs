@@ -424,6 +424,31 @@ fn parse_root(hex_str: &str) -> H256 {
     H256::from(bytes)
 }
 
+fn advance_to_interval(
+    store: &mut Store,
+    current_interval: &mut u64,
+    target_interval: u64,
+    has_proposal: bool,
+    is_aggregator: bool,
+) -> Result<(), String> {
+    let intervals_per_slot = Interval::CARDINALITY as u64;
+
+    while *current_interval < target_interval {
+        let next_interval = *current_interval + 1;
+        let slot = Slot(next_interval / intervals_per_slot);
+        let interval = Interval::from_repr((next_interval % intervals_per_slot) as u8)
+            .expect("interval index must be in range");
+        let should_signal_proposal = has_proposal && next_interval == target_interval;
+
+        store
+            .on_tick(slot, interval, should_signal_proposal, is_aggregator)
+            .map_err(|e| format!("on_tick failed: {e:?}"))?;
+        *current_interval = next_interval;
+    }
+
+    Ok(())
+}
+
 fn verify_checks(
     store: &Store,
     checks: &Option<TestChecks>,
@@ -491,23 +516,12 @@ fn forkchoice(spec_file: &str) {
     let test_cases: HashMap<String, TestCase> = serde_json::from_reader(&mut file).unwrap();
 
     for (_, case) in test_cases {
-        let config = Config {
-            genesis_time: case.anchor_state.config.genesis_time,
-        };
-
-        let mut anchor_state: State = case.anchor_state.into();
+        let anchor_state: State = case.anchor_state.into();
         let anchor_block: SignedBlockWithAttestation = case.anchor_block.into();
 
-        let body_root = anchor_block.message.block.body.hash_tree_root();
-        anchor_state.latest_block_header = BlockHeader {
-            slot: anchor_block.message.block.slot,
-            proposer_index: anchor_block.message.block.proposer_index,
-            parent_root: anchor_block.message.block.parent_root,
-            state_root: anchor_block.message.block.state_root,
-            body_root,
-        };
-
-        let mut store = Store::new(anchor_state, anchor_block.message.block, None);
+        let mut current_interval = anchor_block.message.block.slot.0 * Interval::CARDINALITY as u64;
+        let mut store = Store::new(anchor_state, anchor_block.message.block, Some(0))
+            .expect("store initialization must match fixture anchor state/block");
         let mut block_labels: HashMap<String, H256> = HashMap::new();
 
         for (step_idx, step) in case.steps.into_iter().enumerate() {
@@ -527,15 +541,19 @@ fn forkchoice(spec_file: &str) {
                         };
                         let block_root = signed_block.message.block.hash_tree_root();
 
-                        // Advance time to the block's proposal interval.
-                        store.on_tick(
-                            signed_block.message.block.slot,
-                            Interval::BlockProposal,
-                            false,
-                            false,
-                        );
+                        // Advance time to the block proposal interval exactly
+                        // like the specification's Store.on_tick(target_interval).
+                        let target_interval =
+                            signed_block.message.block.slot.0 * Interval::CARDINALITY as u64;
+                        advance_to_interval(
+                            &mut store,
+                            &mut current_interval,
+                            target_interval,
+                            true,
+                            true,
+                        )?;
 
-                        store.on_block(signed_block).unwrap();
+                        store.on_block(signed_block).map_err(|e| format!("{e:?}"))?;
                         Ok(block_root)
                     }));
 
@@ -568,17 +586,28 @@ fn forkchoice(spec_file: &str) {
                     }
                 }
                 "tick" | "time" => {
-                    let time_value = step
+                    let target_interval = step
                         .tick
                         .or(step.time)
                         .expect(&format!("Step {step_idx}: Missing tick/time data"));
-                    let intervals_per_slot = Interval::CARDINALITY as u64;
-                    let slot = Slot(time_value / intervals_per_slot);
-                    let interval = Interval::from_repr((time_value % intervals_per_slot) as u8)
-                        .expect("interval index must be in range");
-                    store.on_tick(slot, interval, false, false);
+                    let result = advance_to_interval(
+                        &mut store,
+                        &mut current_interval,
+                        target_interval,
+                        false,
+                        true,
+                    );
 
-                    if step.valid {
+                    if step.valid && result.is_err() {
+                        panic!(
+                            "Step {step_idx}: Tick should be valid but processing failed: {:?}",
+                            result.err().unwrap()
+                        );
+                    } else if !step.valid && result.is_ok() {
+                        panic!("Step: {step_idx}: Tick should be invalid but processing succeeded");
+                    }
+
+                    if step.valid && result.is_ok() {
                         verify_checks(&store, &step.checks, &block_labels, step_idx).expect(
                             &format!("Step: {step_idx}: Should be valid but checks failed"),
                         );
