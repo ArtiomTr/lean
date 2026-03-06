@@ -36,21 +36,16 @@
 //! let effects = sim.drain_effects();
 //! ```
 
-use std::{collections::VecDeque, sync::Arc};
-
-use containers::{
-    AggregatedSignatureProof, AggregationBits, SignedAggregatedAttestation, SignedAttestation,
-};
 use fork_choice::Store;
 use rand::Rng as _;
 use rand_chacha::{rand_core::SeedableRng as _, ChaCha8Rng};
-use ssz::SszHash as _;
+use std::collections::VecDeque;
 use tracing::warn;
 
 use crate::{
     chain::{ChainMessage, ChainService},
     environment::{Effect, Event, Message, Service, ServiceInput, ServiceOutput},
-    network::{NetworkEffect, NetworkEvent},
+    network::{NetworkEffect, NetworkEvent, NetworkMessage},
     validator::{KeyManager, ValidatorConfig, ValidatorMessage, ValidatorService},
 };
 
@@ -182,10 +177,6 @@ impl ClusterSimulator {
                 }
             }
             Effect::Network(NetworkEffect::PublishAttestation(attestation)) => {
-                let aggregated = self
-                    .single_signature_aggregate(source_node, attestation.as_ref())
-                    .map(Arc::new);
-
                 for (node_index, node) in self.nodes.iter_mut().enumerate() {
                     if node_index == source_node {
                         continue;
@@ -193,47 +184,12 @@ impl ClusterSimulator {
                     node.push_event(Event::Network(NetworkEvent::GossipAttestation(
                         attestation.clone(),
                     )));
-
-                    if let Some(aggregated) = &aggregated {
-                        node.push_event(Event::Network(NetworkEvent::GossipAggregatedAttestation(
-                            aggregated.clone(),
-                        )));
-                    }
                 }
             }
-            Effect::Network(NetworkEffect::RequestBlocksByRoot(_)) => {}
+            Effect::Network(NetworkEffect::RequestBlocksByRoot(_))
+            | Effect::Network(NetworkEffect::SendRequestBlocksByRoot { .. })
+            | Effect::Network(NetworkEffect::SendResponse { .. }) => {}
         }
-    }
-
-    fn single_signature_aggregate(
-        &self,
-        source_node: usize,
-        attestation: &SignedAttestation,
-    ) -> Option<SignedAggregatedAttestation> {
-        let state = self
-            .nodes
-            .get(source_node)?
-            .store()
-            .states()
-            .get(&attestation.message.target.root)?;
-
-        let validator = state.validators.get(attestation.validator_id).ok()?;
-        let participants = AggregationBits::from_validator_indices(&[attestation.validator_id]);
-        let data_root = attestation.message.hash_tree_root();
-
-        let proof = AggregatedSignatureProof::aggregate(
-            participants,
-            [validator.pubkey.clone()],
-            [attestation.signature.clone()],
-            data_root,
-            attestation.message.slot.0 as u32,
-        )
-        .ok()?;
-
-        Some(SignedAggregatedAttestation {
-            data: attestation.message.clone(),
-            proof,
-        })
     }
 }
 
@@ -325,8 +281,12 @@ impl Simulator {
             return None;
         }
 
-        let idx = self.rng.random_range(0..decisions.len());
-        let service_id = decisions[idx];
+        let service_id = if self.should_prioritize_chain_tick() {
+            ServiceId::Chain
+        } else {
+            let idx = self.rng.random_range(0..decisions.len());
+            decisions[idx]
+        };
 
         let out = match service_id {
             ServiceId::Chain => {
@@ -359,12 +319,35 @@ impl Simulator {
                 Message::Validator(msg) => {
                     self.validator_queue.push_back(ServiceInput::Message(msg));
                 }
+                Message::Network(msg) => match msg {
+                    NetworkMessage::RequestBlocksByRoot(block_roots) => {
+                        self.effects
+                            .push(Effect::Network(NetworkEffect::RequestBlocksByRoot(
+                                block_roots,
+                            )));
+                    }
+                    NetworkMessage::SendStatusResponse { .. }
+                    | NetworkMessage::SendBlocksByRootChunk { .. } => {}
+                },
             }
         }
 
         self.effects.extend(out.effects);
 
         Some(service_id)
+    }
+
+    fn should_prioritize_chain_tick(&self) -> bool {
+        let chain_tick = matches!(
+            self.chain_queue.front(),
+            Some(ServiceInput::Event(Event::Tick(_)))
+        );
+        let validator_tick = matches!(
+            self.validator_queue.front(),
+            Some(ServiceInput::Event(Event::Tick(_)))
+        );
+
+        chain_tick && validator_tick
     }
 
     /// Take all effects accumulated since the last call.
@@ -387,6 +370,7 @@ mod tests {
     use super::*;
 
     const NODE_COUNT: u64 = 3;
+    const VALIDATOR_COUNT: u64 = 3;
     const SLOTS_TO_SIMULATE: u64 = 12;
     const MAX_STEPS_PER_TICK: usize = 200_000;
 
@@ -402,11 +386,11 @@ mod tests {
     }
 
     fn run_three_simulated_nodes_finalize_chain() {
-        let (validators, keys_dir) = generate_validators_and_keys(NODE_COUNT);
+        let (validators, keys_dir) = generate_validators_and_keys(VALIDATOR_COUNT);
 
         let nodes = (0..NODE_COUNT)
-            .map(|validator_index| {
-                create_node_simulator(keys_dir.path(), &validators, validator_index)
+            .map(|node_index| {
+                create_node_simulator(keys_dir.path(), &validators, node_index, Some(node_index))
             })
             .collect();
 
@@ -468,7 +452,8 @@ mod tests {
     fn create_node_simulator(
         key_dir: &Path,
         validators: &[Validator],
-        validator_index: u64,
+        node_index: u64,
+        validator_index: Option<u64>,
     ) -> Simulator {
         let state = State::generate_genesis_with_validators(1_000, validators.to_vec());
         let genesis_block = Block {
@@ -479,21 +464,23 @@ mod tests {
             body: BlockBody::default(),
         };
 
-        let store = Store::new(state, genesis_block, Some(validator_index))
+        let store = Store::new(state, genesis_block, Some(node_index))
             .expect("simulator store init should succeed");
 
-        let validator_config = ValidatorConfig {
-            validator_indices: vec![validator_index],
+        let (validator_config, key_manager) = if let Some(validator_index) = validator_index {
+            (
+                Some(ValidatorConfig {
+                    validator_indices: vec![validator_index],
+                }),
+                Some(
+                    KeyManager::load(key_dir, &[validator_index])
+                        .expect("validator key should load successfully"),
+                ),
+            )
+        } else {
+            (None, None)
         };
 
-        let key_manager = KeyManager::load(key_dir, &[validator_index])
-            .expect("validator key should load successfully");
-
-        Simulator::with_seed(
-            store,
-            Some(validator_config),
-            Some(key_manager),
-            validator_index + 1,
-        )
+        Simulator::with_seed(store, validator_config, key_manager, node_index + 1)
     }
 }

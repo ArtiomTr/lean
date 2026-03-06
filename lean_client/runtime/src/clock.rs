@@ -1,4 +1,4 @@
-use anyhow::{Error, Result};
+use anyhow::Result;
 use clock::{SystemClock, Tick};
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
@@ -16,14 +16,10 @@ impl EventSource for SystemClock {
     ) -> Result<()> {
         let mut ticks = self.ticks()?;
 
-        tokio::spawn(async move {
-            while let Some(tick) = ticks.next().await {
-                let tick = tick?;
-                tx.send(tick)?;
-            }
-
-            Ok::<_, Error>(())
-        });
+        while let Some(tick) = ticks.next().await {
+            let tick = tick?;
+            tx.send(tick)?;
+        }
 
         Ok(())
     }

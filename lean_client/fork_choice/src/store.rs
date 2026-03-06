@@ -81,7 +81,11 @@ impl Store {
     /// # Errors
     /// Returns an error if the anchor block's state root does not match the hash of
     /// the provided state.
-    pub fn new(anchor_state: State, anchor_block: Block, validator_id: Option<u64>) -> Result<Self> {
+    pub fn new(
+        anchor_state: State,
+        anchor_block: Block,
+        validator_id: Option<u64>,
+    ) -> Result<Self> {
         // Compute the SSZ root of the given state
         let computed_state_root = anchor_state.hash_tree_root();
 
@@ -360,16 +364,24 @@ impl Store {
             .verify(public_key, attestation_data.slot.0 as u32, data_root)
             .map_err(|e| anyhow!("Signature verification failed: {}", e))?;
 
+        let sig_key = SignatureKey {
+            validator_id,
+            data_root,
+        };
+
+        // Track this attestation for fork-choice voting even if aggregation
+        // has not happened yet. An empty proof list is treated as a direct
+        // per-validator vote in `extract_attestations_from_aggregated_payloads`.
+        self.latest_new_aggregated_payloads
+            .entry(sig_key.clone())
+            .or_default();
+
         // Store signature if aggregator with subnet filtering
         if is_aggregator && let Some(my_id) = self.validator_id {
             let my_subnet = my_id % ATTESTATION_COMMITTEE_COUNT;
             let attester_subnet = validator_id % ATTESTATION_COMMITTEE_COUNT;
 
             if my_subnet == attester_subnet {
-                let sig_key = SignatureKey {
-                    validator_id,
-                    data_root,
-                };
                 self.gossip_signatures.insert(sig_key, signature.clone());
             }
         }
@@ -818,10 +830,12 @@ impl Store {
 
         let final_slot = self.latest_finalized.slot;
         loop {
-            let target_block = self
-                .blocks
-                .get(&target)
-                .ok_or_else(|| anyhow!("Target block not found during justification walk: {}", target))?;
+            let target_block = self.blocks.get(&target).ok_or_else(|| {
+                anyhow!(
+                    "Target block not found during justification walk: {}",
+                    target
+                )
+            })?;
 
             if target_block.slot.is_justifiable_after(final_slot) {
                 return Ok(Checkpoint {
@@ -906,7 +920,10 @@ impl Store {
 
         // Validate proposer authorization for this slot
         let num_validators = head_state.validators.len_u64();
-        ensure!(num_validators > 0, "Cannot produce block: empty validator set");
+        ensure!(
+            num_validators > 0,
+            "Cannot produce block: empty validator set"
+        );
         let expected_proposer = slot.0 % num_validators;
         ensure!(
             validator_index == expected_proposer,
@@ -1016,12 +1033,12 @@ impl Store {
         // Process block body attestations and store their proofs in known payloads
         let aggregated_attestations = &block.body.attestations;
         let attestation_signatures = &signed_block.signature.attestation_signatures;
-        let missing_proposer_signature = signed_block.signature.proposer_signature == Signature::default();
+        let missing_proposer_signature =
+            signed_block.signature.proposer_signature == Signature::default();
 
-        let missing_all_attestation_signatures =
-            aggregated_attestations.len_u64() > 0
-                && attestation_signatures.len_u64() == 0
-                && missing_proposer_signature;
+        let missing_all_attestation_signatures = aggregated_attestations.len_u64() > 0
+            && attestation_signatures.len_u64() == 0
+            && missing_proposer_signature;
 
         if missing_all_attestation_signatures {
             // Some test-vector fixtures serialize block body attestations without

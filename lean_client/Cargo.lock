@@ -2936,6 +2936,7 @@ dependencies = [
  "libp2p-identity",
  "metrics",
  "networking",
+ "runtime",
  "ssz",
  "tokio",
  "tracing",
@@ -5273,6 +5274,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tracing",
  "xmss",
 ]

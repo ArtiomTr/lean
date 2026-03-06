@@ -1,29 +1,20 @@
-//! Real-time node: runs services and event sources on the tokio runtime.
-//!
-//! The `Node` wires together:
-//! - `SystemClock` (EventSource) — emits `Event::Tick` at each consensus interval.
-//! - `NetworkEventSource` (EventSource) — emits `Event::Network` for
-//!   inbound gossip and consumes `Effect`s for outbound gossip and block requests.
-//! - `ChainService` (Service) — owns the fork choice store; processes ticks and
-//!   network events; handles block/attestation production requests from validators.
-//! - `ValidatorService` (Service, optional) — drives block proposals and attestations.
-//!
-//! Effects produced by services are forwarded to the appropriate EventSource.
-//! Currently all effects go to the `NetworkEventSource`; the clock has no effects.
-
-use anyhow::{Error, Result};
+use anyhow::{Result, anyhow, bail};
 use clock::SystemClock;
 use fork_choice::Store;
+use futures::future::join_all;
 use networking::NetworkConfig;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
 use crate::{
     chain::ChainService,
     environment::{Effect, Event, EventSource, Message, Service, ServiceInput},
-    network::NetworkEventSource,
+    network::{NetworkEventSource, NetworkService},
     validator::{KeyManager, ValidatorConfig, ValidatorService},
 };
+
+type TaskHandle = tokio::task::JoinHandle<Result<()>>;
 
 pub struct Node {
     clock: SystemClock,
@@ -55,134 +46,260 @@ impl Node {
             .enable_all()
             .build()?;
 
-        runtime.block_on(async move {
-            // Errors are logged inside `execute` itself via tracing.
-            self.execute().await.ok();
-        });
-
-        Ok(())
+        runtime.block_on(self.execute())
     }
 
-    async fn spawn_event_source<T: EventSource>(
+    fn spawn_event_source<T>(
         mut source: T,
-        tx: mpsc::UnboundedSender<Event>,
-        map_event: impl Fn(T::Event) -> Event + 'static + Send,
-    ) -> Result<mpsc::UnboundedSender<T::Effect>> {
-        let (temp_tx, mut temp_rx) = mpsc::unbounded_channel();
+        event_tx: mpsc::UnboundedSender<Event>,
+        map_event: fn(T::Event) -> Event,
+        shutdown: CancellationToken,
+    ) -> (mpsc::UnboundedSender<T::Effect>, TaskHandle)
+    where
+        T: EventSource + Send + 'static,
+    {
+        let (source_event_tx, mut source_event_rx) = mpsc::unbounded_channel();
+        let (effect_tx, effect_rx) = mpsc::unbounded_channel();
 
-        tokio::task::spawn(async move {
-            while let Some(event) = temp_rx.recv().await {
-                let event = map_event(event);
-                // TODO(networking): log error here
-                tx.send(event);
-            }
+        let task_shutdown = shutdown.clone();
+        let handle = tokio::spawn(async move {
+            let mut source_task =
+                tokio::spawn(async move { source.run(source_event_tx, effect_rx).await });
+
+            let result = loop {
+                tokio::select! {
+                    _ = task_shutdown.cancelled() => {
+                        source_task.abort();
+                        drop(source_task.await);
+                        break Ok(());
+                    }
+                    source_result = &mut source_task => {
+                        break source_result.map_err(anyhow::Error::from)?;
+                    }
+                    event = source_event_rx.recv() => {
+                        let Some(event) = event else {
+                            break source_task.await.map_err(anyhow::Error::from)?;
+                        };
+
+                        event_tx
+                            .send(map_event(event))
+                            .map_err(|_| anyhow!("event router exited"))?;
+                    }
+                }
+            };
+
+            shutdown.cancel();
+            result
         });
 
-        let (out_tx, out_rx) = mpsc::unbounded_channel();
-
-        source.run(temp_tx, out_rx).await?;
-
-        Ok(out_tx)
+        (effect_tx, handle)
     }
 
-    fn spawn_service<T: Service + 'static + Send>(
+    fn spawn_service<T: Service + Send + 'static>(
         mut service: T,
         message_tx: mpsc::UnboundedSender<Message>,
         effect_tx: mpsc::UnboundedSender<Effect>,
-    ) -> mpsc::UnboundedSender<ServiceInput<T::Message>> {
+        shutdown: CancellationToken,
+    ) -> (mpsc::UnboundedSender<ServiceInput<T::Message>>, TaskHandle) {
         let (mailbox_tx, mut mailbox_rx) = mpsc::unbounded_channel();
 
-        tokio::task::spawn(async move {
-            while let Some(input) = mailbox_rx.recv().await {
-                let output = service.handle_input(input);
+        let task_shutdown = shutdown.clone();
+        let handle = tokio::spawn(async move {
+            let result = async {
+                loop {
+                    tokio::select! {
+                        _ = task_shutdown.cancelled() => {
+                            return Ok(());
+                        }
+                        input = mailbox_rx.recv() => {
+                            let Some(input) = input else {
+                                if task_shutdown.is_cancelled() {
+                                    return Ok(());
+                                }
 
-                for message in output.messages {
-                    // Ignore send errors: the router task has exited.
-                    message_tx.send(message).ok();
-                }
+                                bail!("service mailbox closed");
+                            };
 
-                for effect in output.effects {
-                    effect_tx.send(effect).ok();
+                            let output = service.handle_input(input);
+
+                            for message in output.messages {
+                                message_tx
+                                    .send(message)
+                                    .map_err(|_| anyhow!("message router exited"))?;
+                            }
+
+                            for effect in output.effects {
+                                effect_tx
+                                    .send(effect)
+                                    .map_err(|_| anyhow!("effect router exited"))?;
+                            }
+                        }
+                    }
                 }
             }
+            .await;
+
+            shutdown.cancel();
+            result
         });
 
-        mailbox_tx
+        (mailbox_tx, handle)
     }
 
     async fn execute(self) -> Result<()> {
-        // Event broadcast channel — EventSources publish Events here.
+        let shutdown = CancellationToken::new();
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-
-        Self::spawn_event_source(self.clock, event_tx.clone(), Event::Tick);
-
-        let network_effect_tx = Self::spawn_event_source(
-            NetworkEventSource::new(self.network_config),
-            event_tx.clone(),
-            Event::Network,
-        )
-        .await?;
-
         let (message_tx, mut message_rx) = mpsc::unbounded_channel();
         let (effect_tx, mut effect_rx) = mpsc::unbounded_channel();
 
-        let chain_mailbox = Self::spawn_service(
+        let (network_effect_tx, network_source_task) = Self::spawn_event_source(
+            NetworkEventSource::new(self.network_config),
+            event_tx.clone(),
+            Event::Network,
+            shutdown.clone(),
+        );
+
+        let (_clock_effect_tx, clock_source_task) =
+            Self::spawn_event_source(self.clock, event_tx, Event::Tick, shutdown.clone());
+
+        let (chain_mailbox, chain_task) = Self::spawn_service(
             ChainService::new(self.store),
             message_tx.clone(),
             effect_tx.clone(),
+            shutdown.clone(),
         );
-        let validator_mailbox = self
+
+        let (network_mailbox, network_task) = Self::spawn_service(
+            NetworkService::new(),
+            message_tx.clone(),
+            effect_tx.clone(),
+            shutdown.clone(),
+        );
+
+        let (validator_mailbox, validator_task) = self
             .validator_config
             .zip(self.key_manager)
             .map(|(config, manager)| ValidatorService::new(config, manager))
-            .map(|service| Self::spawn_service(service, message_tx.clone(), effect_tx.clone()));
+            .map(|service| Self::spawn_service(service, message_tx, effect_tx, shutdown.clone()))
+            .map_or((None, None), |(mailbox, handle)| {
+                (Some(mailbox), Some(handle))
+            });
 
-        // Route inter-service Messages to the correct service mailbox.
-        {
-            let chain_mailbox = chain_mailbox.clone();
-            let validator_mailbox = validator_mailbox.clone();
-            tokio::spawn(async move {
-                while let Some(message) = message_rx.recv().await {
-                    match message {
-                        Message::Chain(chain_message) => {
-                            chain_mailbox.send(ServiceInput::Message(chain_message))?;
+        let router_shutdown = shutdown.clone();
+        let router_task = tokio::spawn(async move {
+            let result = async {
+                loop {
+                    tokio::select! {
+                        _ = router_shutdown.cancelled() => {
+                            return Ok(());
                         }
-                        Message::Validator(validator_message) => {
-                            validator_mailbox
-                                .as_ref()
-                                .map(|mb| mb.send(ServiceInput::Message(validator_message)))
-                                .unwrap_or_else(|| Ok(warn!("validator service not configured")))?;
+                        message = message_rx.recv() => {
+                            let Some(message) = message else {
+                                if router_shutdown.is_cancelled() {
+                                    return Ok(());
+                                }
+
+                                bail!("message router channel closed");
+                            };
+
+                            match message {
+                                Message::Chain(msg) => {
+                                    chain_mailbox
+                                        .send(ServiceInput::Message(msg))
+                                        .map_err(|_| anyhow!("chain mailbox closed"))?;
+                                }
+                                Message::Validator(msg) => {
+                                    if let Some(mailbox) = validator_mailbox.as_ref() {
+                                        mailbox
+                                            .send(ServiceInput::Message(msg))
+                                            .map_err(|_| anyhow!("validator mailbox closed"))?;
+                                    } else {
+                                        warn!("validator service not configured");
+                                    }
+                                }
+                                Message::Network(msg) => {
+                                    network_mailbox
+                                        .send(ServiceInput::Message(msg))
+                                        .map_err(|_| anyhow!("network mailbox closed"))?;
+                                }
+                            }
+                        }
+                        event = event_rx.recv() => {
+                            let Some(event) = event else {
+                                if router_shutdown.is_cancelled() {
+                                    return Ok(());
+                                }
+
+                                bail!("event router channel closed");
+                            };
+
+                            match event {
+                                Event::Network(network_event) => {
+                                    network_mailbox
+                                        .send(ServiceInput::Event(Event::Network(network_event)))
+                                        .map_err(|_| anyhow!("network mailbox closed"))?;
+                                }
+                                Event::Tick(tick) => {
+                                    chain_mailbox
+                                        .send(ServiceInput::Event(Event::Tick(tick)))
+                                        .map_err(|_| anyhow!("chain mailbox closed"))?;
+
+                                    network_mailbox
+                                        .send(ServiceInput::Event(Event::Tick(tick)))
+                                        .map_err(|_| anyhow!("network mailbox closed"))?;
+
+                                    if let Some(mailbox) = validator_mailbox.as_ref() {
+                                        mailbox
+                                            .send(ServiceInput::Event(Event::Tick(tick)))
+                                            .map_err(|_| anyhow!("validator mailbox closed"))?;
+                                    }
+                                }
+                            }
+                        }
+                        effect = effect_rx.recv() => {
+                            let Some(effect) = effect else {
+                                if router_shutdown.is_cancelled() {
+                                    return Ok(());
+                                }
+
+                                bail!("effect router channel closed");
+                            };
+
+                            match effect {
+                                Effect::Network(effect) => {
+                                    network_effect_tx
+                                        .send(effect)
+                                        .map_err(|_| anyhow!("network event source effect mailbox closed"))?;
+                                }
+                            }
+                        }
+                        _ = tokio::signal::ctrl_c() => {
+                            router_shutdown.cancel();
                         }
                     }
                 }
+            }
+            .await;
 
-                Ok::<_, Error>(())
-            });
+            router_shutdown.cancel();
+            result
+        });
+
+        let mut handles = vec![
+            network_source_task,
+            clock_source_task,
+            chain_task,
+            network_task,
+            router_task,
+        ];
+
+        if let Some(validator_task) = validator_task {
+            handles.push(validator_task);
         }
 
-        // Broadcast Events from all EventSources to all Services.
-        tokio::spawn(async move {
-            while let Some(event) = event_rx.recv().await {
-                chain_mailbox.send(ServiceInput::Event(event.clone())).ok();
-                if let Some(ref mb) = validator_mailbox {
-                    mb.send(ServiceInput::Event(event)).ok();
-                }
-            }
-        });
-
-        // Route Effects to the EventSource that handles them.
-        // Currently all effects are network effects; the clock has no effects.
-        tokio::spawn(async move {
-            while let Some(effect) = effect_rx.recv().await {
-                match effect {
-                    Effect::Network(effect) => {
-                        if network_effect_tx.send(effect).is_err() {
-                            break;
-                        }
-                    }
-                }
-            }
-        });
+        for result in join_all(handles).await {
+            result.map_err(anyhow::Error::from).flatten()?;
+        }
 
         Ok(())
     }

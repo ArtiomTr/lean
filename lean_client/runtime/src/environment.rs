@@ -7,10 +7,11 @@
 
 use anyhow::Result;
 use smallvec::SmallVec;
+use std::future::Future;
 use tokio::sync::mpsc;
 use tracing::Span;
 
-pub use crate::network::{NetworkEffect, NetworkEvent};
+pub use crate::network::{NetworkEffect, NetworkEvent, NetworkMessage};
 
 use clock::Tick;
 
@@ -37,6 +38,7 @@ pub struct SpannedEvent {
 pub enum Message {
     Validator(ValidatorMessage),
     Chain(ChainMessage),
+    Network(NetworkMessage),
 }
 
 impl SpannedEvent {
@@ -112,6 +114,22 @@ impl ServiceOutput {
         self.effects.push(eff);
         self
     }
+
+    #[inline]
+    pub fn network_message(msg: NetworkMessage) -> Self {
+        let mut messages = SmallVec::new();
+        messages.push(Message::Network(msg));
+        Self {
+            messages,
+            effects: SmallVec::new(),
+        }
+    }
+
+    #[inline]
+    pub fn with_network_message(mut self, msg: NetworkMessage) -> Self {
+        self.messages.push(Message::Network(msg));
+        self
+    }
 }
 
 pub trait Service {
@@ -121,12 +139,12 @@ pub trait Service {
 }
 
 pub trait EventSource {
-    type Event: Send + 'static;
-    type Effect;
+    type Event: Send + Sync + 'static;
+    type Effect: Send + Sync + 'static;
 
-    async fn run(
+    fn run(
         &mut self,
         tx: mpsc::UnboundedSender<Self::Event>,
         rx: mpsc::UnboundedReceiver<Self::Effect>,
-    ) -> Result<()>;
+    ) -> impl Future<Output = Result<()>> + Send;
 }

@@ -1,35 +1,21 @@
-use std::sync::Arc;
-
 use anyhow::{Context as _, Result};
 use clap::Parser;
 use containers::{
-    Attestation, AttestationData, Block, BlockBody, BlockSignatures, BlockWithAttestation,
-    Checkpoint, Config, SignedBlockWithAttestation, Slot, State, Validator,
+    Block, BlockBody, Slot, State, Validator,
 };
 use ethereum_types::H256;
 use features::Feature;
-use fork_choice::store::{Store, get_forkchoice_store};
+use fork_choice::Store;
 use http_api::HttpServerConfig;
-use libp2p_identity::Keypair;
-use networking::{
-    config::{Config as NetworkServiceConfig, GossipsubConfig},
-    gossipsub::topic::get_topics,
-};
-use runtime::{KeyManager, NetworkConfig, Node, ValidatorConfig};
-use ssz::{PersistentList, SszHash};
+use networking::{Multiaddr, NetworkConfig as NetworkServiceConfig};
+use runtime::{KeyManager, Node, ValidatorConfig};
+use ssz::SszHash;
 use std::net::IpAddr;
+use std::path::PathBuf;
 use tracing::level_filters::LevelFilter;
 use tracing::{info, warn};
 use validator::ValidatorConfig as RegistryValidatorConfig;
-use xmss::{PublicKey, Signature};
-
-fn load_node_key(path: &str) -> Result<Keypair, Box<dyn std::error::Error>> {
-    let hex_str = std::fs::read_to_string(path)?.trim().to_string();
-    let bytes = hex::decode(&hex_str)?;
-    let secret = libp2p_identity::secp256k1::SecretKey::try_from_bytes(bytes)?;
-    let keypair = libp2p_identity::secp256k1::Keypair::from(secret);
-    Ok(Keypair::from(keypair))
-}
+use xmss::PublicKey;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -86,7 +72,7 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    for feature in args.features {
+    for feature in &args.features {
         feature.enable();
     }
 
@@ -133,38 +119,8 @@ async fn main() -> Result<()> {
         },
     };
 
-    let genesis_proposer_attestation = Attestation {
-        validator_id: 0,
-        data: AttestationData {
-            slot: Slot(0),
-            head: Checkpoint {
-                root: H256::zero(),
-                slot: Slot(0),
-            },
-            target: Checkpoint {
-                root: H256::zero(),
-                slot: Slot(0),
-            },
-            source: Checkpoint {
-                root: H256::zero(),
-                slot: Slot(0),
-            },
-        },
-    };
-
-    let genesis_signed_block = SignedBlockWithAttestation {
-        message: BlockWithAttestation {
-            block: genesis_block,
-            proposer_attestation: genesis_proposer_attestation,
-        },
-        signature: BlockSignatures {
-            attestation_signatures: PersistentList::default(),
-            proposer_signature: Signature::default(),
-        },
-    };
-
-    let config = Config { genesis_time };
-    let store: Store = get_forkchoice_store(genesis_state.clone(), genesis_signed_block, config);
+    let store = Store::new(genesis_state.clone(), genesis_block, None)
+        .context("Failed to initialize forkchoice store")?;
 
     info!(
         num_validators = genesis_state.validators.len_u64(),
@@ -231,39 +187,38 @@ async fn main() -> Result<()> {
 
     // ── Network configuration ─────────────────────────────────────────────────
 
-    let keypair = if let Some(key_path) = &args.node_key {
-        match load_node_key(key_path) {
-            Ok(kp) => {
-                info!(peer_id = %kp.public().to_peer_id(), "Using custom node key");
-                Some(kp)
-            }
-            Err(e) => {
-                warn!("Failed to load node key: {e}, using random key");
-                None
-            }
+    let mut network_config = NetworkServiceConfig::default();
+    network_config.disable_discovery = args.disable_discovery;
+
+    match args.address {
+        IpAddr::V4(ipv4) => network_config.set_ipv4_listening_address(
+            ipv4,
+            args.port,
+            args.discovery_port,
+            args.port.saturating_add(1),
+        ),
+        IpAddr::V6(ipv6) => network_config.set_ipv6_listening_address(
+            ipv6,
+            args.port,
+            args.discovery_port,
+            args.port.saturating_add(1),
+        ),
+    }
+
+    let mut parsed_bootnodes = Vec::new();
+    for bootnode in &args.bootnodes {
+        match bootnode.parse::<Multiaddr>() {
+            Ok(addr) => parsed_bootnodes.push(addr),
+            Err(error) => warn!(%bootnode, %error, "Skipping invalid bootnode multiaddr"),
         }
-    } else {
-        None
-    };
+    }
+    network_config.boot_nodes_multiaddr = parsed_bootnodes.clone();
+    network_config.libp2p_nodes = parsed_bootnodes;
 
-    let fork = "devnet0".to_string();
-    let gossipsub_topics = get_topics(fork);
-    let mut gossipsub_config = GossipsubConfig::new()?;
-    gossipsub_config.set_topics(gossipsub_topics);
-
-    let network_service_config = Arc::new(NetworkServiceConfig::new_with_gossipsub(
-        gossipsub_config,
-        args.address,
-        args.port,
-        args.discovery_port,
-        !args.disable_discovery,
-        args.bootnodes,
-    ));
-
-    let network_config = NetworkConfig {
-        service_config: network_service_config,
-        keypair,
-    };
+    if let Some(key_path) = &args.node_key {
+        network_config.libp2p_private_key_file = Some(PathBuf::from(key_path));
+        info!(%key_path, "Using custom node key path");
+    }
 
     // ── HTTP server ───────────────────────────────────────────────────────────
 

@@ -18,21 +18,24 @@
 //!
 //! When blocks or attestations arrive from the P2P network (`Event::Network`),
 //! `ChainService` inserts them into the fork choice store. If a block's parent
-//! is not yet in the store, it emits `Effect::Network(NetworkEffect::RequestBlocksByRoot)` so the
-//! `NetworkEventSource` can fetch the missing ancestor from peers.
+//! is not yet in the store, it emits `NetworkMessage::RequestBlocksByRoot` so
+//! `NetworkService` can fetch the missing ancestor from peers.
 
 use anyhow::Result;
 use clock::{Interval, Tick};
 use containers::{
-    AttestationData, SignedAggregatedAttestation, SignedAttestation, SignedBlockWithAttestation,
-    Slot,
+    AttestationData, Checkpoint, SignedAggregatedAttestation, SignedAttestation,
+    SignedBlockWithAttestation, Slot,
 };
 use fork_choice::Store;
+use networking::{BlocksByRootRequest, InboundRequestId, PeerId, StatusMessage, StatusMessageV1};
+use ssz::SszHash as _;
+use std::{collections::HashMap, sync::Arc};
 use tracing::{debug, info, warn};
 
 use crate::{
-    environment::{Effect, Event, NetworkEvent, Service, ServiceInput, ServiceOutput},
-    network::NetworkEffect,
+    environment::{Event, NetworkEvent, Service, ServiceInput, ServiceOutput},
+    network::NetworkMessage,
     validator::ValidatorMessage,
 };
 
@@ -40,13 +43,33 @@ use crate::{
 #[derive(Debug, Clone)]
 pub enum ChainMessage {
     /// ValidatorService → ChainService: pull slot state to decide duties.
-    GetSlotData { slot: Slot, interval: Interval },
+    GetSlotData {
+        slot: Slot,
+        interval: Interval,
+    },
 
     /// ValidatorService → ChainService: request block production.
-    ProduceBlock { slot: Slot, proposer_idx: u64 },
+    ProduceBlock {
+        slot: Slot,
+        proposer_idx: u64,
+    },
 
     /// ValidatorService → ChainService: process attestation in the store.
     ProcessAttestation(SignedAttestation),
+
+    ProcessNetworkBlock(Arc<SignedBlockWithAttestation>),
+    ProcessNetworkAttestation(Arc<SignedAttestation>),
+    ProcessNetworkAggregatedAttestation(Arc<SignedAggregatedAttestation>),
+    HandleStatusRequest {
+        peer_id: PeerId,
+        inbound_request_id: InboundRequestId,
+        request: StatusMessage,
+    },
+    HandleBlocksByRootsRequest {
+        peer_id: PeerId,
+        inbound_request_id: InboundRequestId,
+        request: BlocksByRootRequest,
+    },
 }
 
 /// Drives the consensus clock and owns the forkchoice store.
@@ -56,12 +79,16 @@ pub enum ChainMessage {
 #[derive(Clone)]
 pub struct ChainService {
     store: Store,
+    signed_blocks: HashMap<ssz::H256, Arc<SignedBlockWithAttestation>>,
 }
 
 impl ChainService {
     #[must_use]
     pub fn new(store: Store) -> Self {
-        Self { store }
+        Self {
+            store,
+            signed_blocks: HashMap::new(),
+        }
     }
 
     #[must_use]
@@ -80,11 +107,15 @@ impl ChainService {
     /// Process a block from the network and return any required effects.
     ///
     /// On success, the block is inserted into the fork choice store.
-    /// When the parent block is unknown, emits `Effect::Network(NetworkEffect::RequestBlocksByRoot)`
-    /// so the missing ancestor can be fetched from peers.
+    /// When the parent block is unknown, emits `NetworkMessage::RequestBlocksByRoot` so the
+    /// missing ancestor can be fetched from peers.
     fn process_network_block(&mut self, signed_block: SignedBlockWithAttestation) -> ServiceOutput {
+        let block_root = signed_block.message.block.hash_tree_root();
         let slot = signed_block.message.block.slot.0;
         let parent_root = signed_block.message.block.parent_root;
+
+        self.signed_blocks
+            .insert(block_root, Arc::new(signed_block.clone()));
 
         match self.store.on_block(signed_block) {
             Ok(()) => {
@@ -106,9 +137,9 @@ impl ChainService {
                         return ServiceOutput::none();
                     }
 
-                    ServiceOutput::none().with_effect(Effect::Network(
-                        NetworkEffect::RequestBlocksByRoot(vec![parent_root]),
-                    ))
+                    ServiceOutput::network_message(NetworkMessage::RequestBlocksByRoot(vec![
+                        parent_root,
+                    ]))
                 } else {
                     warn!(%err, slot, "Failed to process network block");
                     ServiceOutput::none()
@@ -161,7 +192,9 @@ impl Service for ChainService {
 
                 if let Err(err) = self.store.on_tick(Slot(slot), interval, false, false) {
                     warn!(%err, slot, interval = ?interval, "Failed to advance forkchoice tick");
+                    return ServiceOutput::none();
                 }
+
                 ServiceOutput::none()
             }
 
@@ -190,7 +223,7 @@ impl Service for ChainService {
             // ── RPC status request flow ────────────────────────────────────────
             //
             // Received a status RPC request.
-            ServiceInput::Event(Event::Network(NetworkEvent::RpcStatusRequest(_, _))) => {
+            ServiceInput::Event(Event::Network(NetworkEvent::RpcStatusRequest { .. })) => {
                 // TODO: Handle status requests
                 ServiceOutput::none()
             }
@@ -198,10 +231,14 @@ impl Service for ChainService {
             // ── RPC blocks by roots request flow ───────────────────────────────
             //
             // Received a blocks by roots RPC request.
-            ServiceInput::Event(Event::Network(NetworkEvent::RpcBlocksByRootsRequest(_, _))) => {
+            ServiceInput::Event(Event::Network(NetworkEvent::RpcBlocksByRootsRequest {
+                ..
+            })) => {
                 // TODO: Handle blocks by roots requests
                 ServiceOutput::none()
             }
+
+            ServiceInput::Event(Event::Network(_)) => ServiceOutput::none(),
 
             // ── GetSlotData flow ─────────────────────────────────────────────
             //
@@ -279,6 +316,73 @@ impl Service for ChainService {
                     warn!(%err, validator = validator_id, "Failed to process attestation in store");
                 }
                 ServiceOutput::none()
+            }
+
+            ServiceInput::Message(ChainMessage::ProcessNetworkBlock(signed_block)) => {
+                self.process_network_block(signed_block.as_ref().clone())
+            }
+
+            ServiceInput::Message(ChainMessage::ProcessNetworkAttestation(attestation)) => {
+                self.process_network_attestation(attestation.as_ref().clone())
+            }
+
+            ServiceInput::Message(ChainMessage::ProcessNetworkAggregatedAttestation(
+                attestation,
+            )) => self.process_network_aggregated_attestation(attestation.as_ref().clone()),
+
+            ServiceInput::Message(ChainMessage::HandleStatusRequest {
+                peer_id,
+                inbound_request_id,
+                request: _,
+            }) => {
+                let head_root = self.store.head();
+                let head_slot = self
+                    .store
+                    .blocks()
+                    .get(&head_root)
+                    .map(|block| block.slot)
+                    .unwrap_or(Slot(0));
+
+                let response = StatusMessage::V1(StatusMessageV1 {
+                    finalized: *self.store.latest_finalized(),
+                    head: Checkpoint {
+                        root: head_root,
+                        slot: head_slot,
+                    },
+                });
+
+                ServiceOutput::network_message(NetworkMessage::SendStatusResponse {
+                    peer_id,
+                    inbound_request_id,
+                    status: response,
+                })
+            }
+
+            ServiceInput::Message(ChainMessage::HandleBlocksByRootsRequest {
+                peer_id,
+                inbound_request_id,
+                request,
+            }) => {
+                let mut output = ServiceOutput::none();
+
+                for root in request.block_roots() {
+                    if let Some(block) = self.signed_blocks.get(&root) {
+                        output =
+                            output.with_network_message(NetworkMessage::SendBlocksByRootChunk {
+                                peer_id,
+                                inbound_request_id,
+                                block: Some(block.clone()),
+                            });
+                    }
+                }
+
+                output = output.with_network_message(NetworkMessage::SendBlocksByRootChunk {
+                    peer_id,
+                    inbound_request_id,
+                    block: None,
+                });
+
+                output
             }
         }
     }
