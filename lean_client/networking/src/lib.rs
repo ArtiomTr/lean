@@ -19,7 +19,9 @@ pub use config::Config as NetworkConfig;
 pub use discovery::{CombinedKeyExt, EnrExt, Eth2Enr};
 pub use libp2p::{Multiaddr, PeerId, gossipsub::TopicHash};
 pub use peer_manager::{SyncInfo, peerdb::client::Client};
-pub use rpc::{BlocksByRootRequest, InboundRequestId, RequestType, StatusMessage, StatusMessageV1};
+pub use rpc::{
+    BlocksByRootRequest, InboundRequestId, RPCError, RequestType, StatusMessage, StatusMessageV1,
+};
 pub use service::api_types::{AppRequestId, Response};
 pub use service::{Gossipsub, Network, NetworkEvent, utils::Context as ServiceContext};
 pub use task_executor::TaskExecutor;

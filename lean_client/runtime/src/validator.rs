@@ -16,12 +16,12 @@
 
 use std::{collections::HashMap, path::Path, sync::Arc};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use containers::{
     AggregatedSignatureProof, Attestation, AttestationData, Block, BlockSignatures,
     BlockWithAttestation, SignedAttestation, SignedBlockWithAttestation, Slot,
 };
-use ssz::{PersistentList, SszHash as _, H256};
+use ssz::{H256, PersistentList, SszHash as _};
 use tracing::{debug, info, warn};
 use xmss::{SecretKey, Signature};
 

@@ -65,6 +65,9 @@ pub enum ChainMessage {
         inbound_request_id: InboundRequestId,
         request: StatusMessage,
     },
+    SendStatusRequest {
+        peer_id: PeerId,
+    },
     HandleBlocksByRootsRequest {
         peer_id: PeerId,
         inbound_request_id: InboundRequestId,
@@ -223,20 +226,28 @@ impl Service for ChainService {
             // ── RPC status request flow ────────────────────────────────────────
             //
             // Received a status RPC request.
-            ServiceInput::Event(Event::Network(NetworkEvent::RpcStatusRequest { .. })) => {
-                // TODO: Handle status requests
-                ServiceOutput::none()
-            }
+            ServiceInput::Event(Event::Network(NetworkEvent::RpcStatusRequest {
+                peer_id,
+                inbound_request_id,
+                request,
+            })) => ServiceOutput::chain_message(ChainMessage::HandleStatusRequest {
+                peer_id,
+                inbound_request_id,
+                request,
+            }),
 
             // ── RPC blocks by roots request flow ───────────────────────────────
             //
             // Received a blocks by roots RPC request.
             ServiceInput::Event(Event::Network(NetworkEvent::RpcBlocksByRootsRequest {
-                ..
-            })) => {
-                // TODO: Handle blocks by roots requests
-                ServiceOutput::none()
-            }
+                peer_id,
+                inbound_request_id,
+                request,
+            })) => ServiceOutput::chain_message(ChainMessage::HandleBlocksByRootsRequest {
+                peer_id,
+                inbound_request_id,
+                request,
+            }),
 
             ServiceInput::Event(Event::Network(_)) => ServiceOutput::none(),
 
@@ -355,6 +366,29 @@ impl Service for ChainService {
                     peer_id,
                     inbound_request_id,
                     status: response,
+                })
+            }
+
+            ServiceInput::Message(ChainMessage::SendStatusRequest { peer_id }) => {
+                let head_root = self.store.head();
+                let head_slot = self
+                    .store
+                    .blocks()
+                    .get(&head_root)
+                    .map(|block| block.slot)
+                    .unwrap_or(Slot(0));
+
+                let status = StatusMessage::V1(StatusMessageV1 {
+                    finalized: *self.store.latest_finalized(),
+                    head: Checkpoint {
+                        root: head_root,
+                        slot: head_slot,
+                    },
+                });
+
+                ServiceOutput::network_message(NetworkMessage::SendStatusRequest {
+                    peer_id,
+                    status,
                 })
             }
 

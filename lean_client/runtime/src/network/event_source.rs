@@ -1,11 +1,9 @@
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use containers::{
     ForkDigest, SignedAggregatedAttestation, SignedAttestation, SignedBlockWithAttestation,
 };
@@ -13,11 +11,11 @@ use fork_choice::ATTESTATION_COMMITTEE_COUNT;
 use futures::FutureExt as _;
 use libp2p_identity::Keypair;
 use networking::{
-    AppRequestId, BlocksByRootRequest, EnrForkId, InboundRequestId, Network, NetworkConfig,
-    PeerId, PubsubMessage, RequestType, Response, ServiceContext, StatusMessage, TaskExecutor,
+    AppRequestId, BlocksByRootRequest, EnrForkId, InboundRequestId, Network, NetworkConfig, PeerId,
+    PubsubMessage, RPCError, RequestType, Response, ServiceContext, StatusMessage, TaskExecutor,
 };
 use ssz::H256;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tracing::{error, warn};
 
 use crate::environment::EventSource;
@@ -49,6 +47,7 @@ pub enum NetworkEvent {
     RpcFailed {
         peer_id: PeerId,
         app_request_id: AppRequestId,
+        error: RPCError,
     },
 }
 
@@ -56,7 +55,13 @@ pub enum NetworkEvent {
 pub enum NetworkEffect {
     PublishBlock(Arc<SignedBlockWithAttestation>),
     PublishAttestation(Arc<SignedAttestation>),
+    PublishAggregatedAttestation(Arc<SignedAggregatedAttestation>),
     RequestBlocksByRoot(Vec<H256>),
+    SendStatusRequest {
+        peer_id: PeerId,
+        app_request_id: AppRequestId,
+        status: StatusMessage,
+    },
     SendRequestBlocksByRoot {
         peer_id: Option<PeerId>,
         app_request_id: AppRequestId,
@@ -67,6 +72,7 @@ pub enum NetworkEffect {
         inbound_request_id: InboundRequestId,
         response: Response,
     },
+    DisconnectPeer(PeerId),
 }
 
 pub struct NetworkEventSource {
@@ -89,6 +95,7 @@ impl EventSource for NetworkEventSource {
         &mut self,
         event_tx: mpsc::UnboundedSender<Self::Event>,
         mut effect_rx: mpsc::UnboundedReceiver<Self::Effect>,
+        startup_tx: oneshot::Sender<Result<()>>,
     ) -> Result<()> {
         let (shutdown_tx, _shutdown_rx) = futures::channel::mpsc::channel(128);
 
@@ -103,7 +110,17 @@ impl EventSource for NetworkEventSource {
         };
 
         let (mut network, globals) =
-            Network::new(executor, context, Keypair::generate_ed25519()).await?;
+            match Network::new(executor, context, Keypair::generate_ed25519()).await {
+                Ok(network) => {
+                    drop(startup_tx.send(Ok(())));
+                    network
+                }
+                Err(err) => {
+                    let startup_err = anyhow!("network initialization failed: {err:#}");
+                    drop(startup_tx.send(Err(startup_err)));
+                    return Err(err.into());
+                }
+            };
         let request_id = AtomicUsize::new(0);
 
         loop {
@@ -126,6 +143,9 @@ impl EventSource for NetworkEventSource {
                             let subnet_id = attestation.validator_id % ATTESTATION_COMMITTEE_COUNT;
                             network.publish(PubsubMessage::Attestation(subnet_id, attestation));
                         }
+                        NetworkEffect::PublishAggregatedAttestation(attestation) => {
+                            network.publish(PubsubMessage::AggregatedAttestation(attestation));
+                        }
                         NetworkEffect::RequestBlocksByRoot(block_roots) => {
                             if block_roots.is_empty() {
                                 continue;
@@ -140,6 +160,26 @@ impl EventSource for NetworkEventSource {
                             let app_request_id = AppRequestId::Application(request_id.fetch_add(1, Ordering::Relaxed));
                             if let Err((_, err)) = network.send_request(peer_id, app_request_id, request) {
                                 warn!(%peer_id, ?err, "failed to send legacy blocks-by-root request");
+                                if let Err(send_err) = event_tx.send(NetworkEvent::RpcFailed {
+                                    peer_id,
+                                    app_request_id,
+                                    error: err,
+                                }) {
+                                    warn!(?send_err, "failed to forward legacy rpc failure event");
+                                }
+                            }
+                        }
+                        NetworkEffect::SendStatusRequest { peer_id, app_request_id, status } => {
+                            let request = RequestType::Status(status);
+                            if let Err((_, err)) = network.send_request(peer_id, app_request_id, request) {
+                                warn!(%peer_id, ?app_request_id, ?err, "failed to send status request");
+                                if let Err(send_err) = event_tx.send(NetworkEvent::RpcFailed {
+                                    peer_id,
+                                    app_request_id,
+                                    error: err,
+                                }) {
+                                    warn!(?send_err, "failed to forward status rpc failure event");
+                                }
                             }
                         }
                         NetworkEffect::SendRequestBlocksByRoot { peer_id, app_request_id, block_roots } => {
@@ -160,10 +200,20 @@ impl EventSource for NetworkEventSource {
                             let request = RequestType::BlocksByRoot(BlocksByRootRequest::new(block_roots.into_iter()));
                             if let Err((_, err)) = network.send_request(peer_id, app_request_id, request) {
                                 warn!(%peer_id, ?app_request_id, ?err, "failed to send blocks-by-root request");
+                                if let Err(send_err) = event_tx.send(NetworkEvent::RpcFailed {
+                                    peer_id,
+                                    app_request_id,
+                                    error: err,
+                                }) {
+                                    warn!(?send_err, "failed to forward blocks-by-root rpc failure event");
+                                }
                             }
                         }
                         NetworkEffect::SendResponse { peer_id, inbound_request_id, response } => {
                             network.send_response(peer_id, inbound_request_id, response);
+                        }
+                        NetworkEffect::DisconnectPeer(peer_id) => {
+                            network.__hard_disconnect_testing_only(peer_id);
                         }
                     }
                 }
@@ -202,30 +252,48 @@ fn handle_network_event(
         networking::NetworkEvent::StatusPeer(peer_id) => {
             event_tx.send(NetworkEvent::StatusPeer(peer_id))?;
         }
-        networking::NetworkEvent::RequestReceived { peer_id, inbound_request_id, request_type } => {
-            match request_type {
-                RequestType::Status(request) => {
-                    event_tx.send(NetworkEvent::RpcStatusRequest {
-                        peer_id,
-                        inbound_request_id,
-                        request,
-                    })?;
-                }
-                RequestType::BlocksByRoot(request) => {
-                    event_tx.send(NetworkEvent::RpcBlocksByRootsRequest {
-                        peer_id,
-                        inbound_request_id,
-                        request,
-                    })?;
-                }
+        networking::NetworkEvent::RequestReceived {
+            peer_id,
+            inbound_request_id,
+            request_type,
+        } => match request_type {
+            RequestType::Status(request) => {
+                event_tx.send(NetworkEvent::RpcStatusRequest {
+                    peer_id,
+                    inbound_request_id,
+                    request,
+                })?;
             }
+            RequestType::BlocksByRoot(request) => {
+                event_tx.send(NetworkEvent::RpcBlocksByRootsRequest {
+                    peer_id,
+                    inbound_request_id,
+                    request,
+                })?;
+            }
+        },
+        networking::NetworkEvent::ResponseReceived {
+            peer_id,
+            app_request_id,
+            response,
+        } => {
+            event_tx.send(NetworkEvent::RpcResponseReceived {
+                peer_id,
+                app_request_id,
+                response,
+            })?;
         }
-        networking::NetworkEvent::ResponseReceived { peer_id, app_request_id, response } => {
-            event_tx.send(NetworkEvent::RpcResponseReceived { peer_id, app_request_id, response })?;
-        }
-        networking::NetworkEvent::RPCFailed { app_request_id, peer_id, error } => {
+        networking::NetworkEvent::RPCFailed {
+            app_request_id,
+            peer_id,
+            error,
+        } => {
             error!(%peer_id, ?app_request_id, ?error, "rpc request failed");
-            event_tx.send(NetworkEvent::RpcFailed { peer_id, app_request_id })?;
+            event_tx.send(NetworkEvent::RpcFailed {
+                peer_id,
+                app_request_id,
+                error,
+            })?;
         }
         networking::NetworkEvent::NewListenAddr(_)
         | networking::NetworkEvent::ZeroListeners

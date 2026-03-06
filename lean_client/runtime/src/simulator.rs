@@ -38,7 +38,7 @@
 
 use fork_choice::Store;
 use rand::Rng as _;
-use rand_chacha::{rand_core::SeedableRng as _, ChaCha8Rng};
+use rand_chacha::{ChaCha8Rng, rand_core::SeedableRng as _};
 use std::collections::VecDeque;
 use tracing::warn;
 
@@ -186,9 +186,21 @@ impl ClusterSimulator {
                     )));
                 }
             }
+            Effect::Network(NetworkEffect::PublishAggregatedAttestation(attestation)) => {
+                for (node_index, node) in self.nodes.iter_mut().enumerate() {
+                    if node_index == source_node {
+                        continue;
+                    }
+                    node.push_event(Event::Network(NetworkEvent::GossipAggregatedAttestation(
+                        attestation.clone(),
+                    )));
+                }
+            }
             Effect::Network(NetworkEffect::RequestBlocksByRoot(_))
+            | Effect::Network(NetworkEffect::SendStatusRequest { .. })
             | Effect::Network(NetworkEffect::SendRequestBlocksByRoot { .. })
-            | Effect::Network(NetworkEffect::SendResponse { .. }) => {}
+            | Effect::Network(NetworkEffect::SendResponse { .. })
+            | Effect::Network(NetworkEffect::DisconnectPeer(_)) => {}
         }
     }
 }
@@ -326,8 +338,10 @@ impl Simulator {
                                 block_roots,
                             )));
                     }
-                    NetworkMessage::SendStatusResponse { .. }
-                    | NetworkMessage::SendBlocksByRootChunk { .. } => {}
+                    NetworkMessage::SendStatusRequest { .. }
+                    | NetworkMessage::SendStatusResponse { .. }
+                    | NetworkMessage::SendBlocksByRootChunk { .. }
+                    | NetworkMessage::DisconnectPeer(_) => {}
                 },
             }
         }
@@ -363,7 +377,7 @@ mod tests {
     use clock::{Interval, Tick};
     use containers::{Block, BlockBody, Slot, State, Validator};
     use rand_chacha::rand_core::SeedableRng as _;
-    use ssz::{SszHash as _, SszWrite as _, H256};
+    use ssz::{H256, SszHash as _, SszWrite as _};
     use tempfile::TempDir;
     use xmss::SecretKey;
 
