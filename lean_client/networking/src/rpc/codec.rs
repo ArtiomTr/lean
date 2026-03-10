@@ -1,8 +1,8 @@
-use crate::rpc::RequestType;
-use crate::rpc::methods::*;
-use crate::rpc::protocol::{
-    ERROR_TYPE_MAX, ERROR_TYPE_MIN, Encoding, ProtocolId, RPCError, SupportedProtocol,
-};
+use std::io::Cursor;
+use std::io::ErrorKind;
+use std::io::{Read, Write};
+use std::sync::Arc;
+
 use containers::{BlocksByRootRequestV1, SignedBlockWithAttestation};
 // use helper_functions::misc;
 use libp2p::bytes::BufMut;
@@ -10,13 +10,15 @@ use libp2p::bytes::BytesMut;
 use snap::read::FrameDecoder;
 use snap::write::FrameEncoder;
 use ssz::{ContiguousList, SszRead as _, SszReadDefault, SszWrite as _};
-use std::io::Cursor;
-use std::io::ErrorKind;
-use std::io::{Read, Write};
-use std::sync::Arc;
 use tokio_util::codec::{Decoder, Encoder};
 
 use unsigned_varint::codec::Uvi;
+
+use crate::rpc::{
+    RequestType,
+    methods::*,
+    protocol::{ERROR_TYPE_MAX, ERROR_TYPE_MIN, Encoding, ProtocolId, RPCError, SupportedProtocol},
+};
 
 const CONTEXT_BYTES_LEN: usize = 4;
 
@@ -428,6 +430,17 @@ fn handle_length(
             None => Ok(None), // need more bytes to decode length
         }
     }
+}
+
+fn checked_max_compressed_len(length: usize) -> Result<u64, RPCError> {
+    let length_u64: u64 = length
+        .try_into()
+        .map_err(|_| RPCError::InvalidData("RPC length does not fit in u64".into()))?;
+
+    length_u64
+        .checked_add(length_u64 / 6)
+        .and_then(|value| value.checked_add(32))
+        .ok_or_else(|| RPCError::InvalidData(format!("RPC response length is too large: {length}")))
 }
 
 /// Decodes an `InboundRequest` from the byte stream.

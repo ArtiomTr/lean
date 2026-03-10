@@ -8,7 +8,6 @@ use futures::{FutureExt, StreamExt};
 use libp2p::core::{InboundUpgrade, UpgradeInfo};
 use ssz::{H256, ReadError, SszSize as _, WriteError};
 use std::pin::Pin;
-use std::sync::Arc;
 use std::time::Duration;
 use std::{fmt, io};
 use strum::{AsRefStr, Display, EnumString, IntoStaticStr};
@@ -17,17 +16,6 @@ use tokio_util::{
     compat::{Compat, FuturesAsyncReadCompatExt},
 };
 use typenum::Unsigned;
-
-pub const SIGNED_BEACON_BLOCK_PHASE0_MIN: usize = 404;
-pub const SIGNED_BEACON_BLOCK_PHASE0_MAX: usize = 157756;
-pub const SIGNED_BEACON_BLOCK_ALTAIR_MAX: usize = 157916;
-pub const SIGNED_BEACON_BLOCK_BELLATRIX_MAX: usize = 1125899911195388;
-
-pub const BLOB_SIDECAR_MIN: usize = 131928;
-pub const BLOB_SIDECAR_MAX: usize = 131928;
-
-pub const BLOB_SIDECAR_MINIMAL_MIN: usize = 131704;
-pub const BLOB_SIDECAR_MINIMAL_MAX: usize = 131704;
 
 pub const ERROR_TYPE_MIN: usize = 0;
 pub const ERROR_TYPE_MAX: usize = 256;
@@ -182,7 +170,8 @@ impl ProtocolId {
     pub fn rpc_response_limits(&self) -> RpcLimits {
         match self.versioned_protocol.protocol() {
             Protocol::Status => RpcLimits::fixed(StatusMessageV1::SIZE.get()),
-            Protocol::BlocksByRoot => todo!(),
+            // TODO(networking): the max value must be computed normally, not by some arbitrary constant
+            Protocol::BlocksByRoot => RpcLimits::new(0, 10 * 1024 * 1024),
         }
     }
 }
