@@ -1,11 +1,11 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use ssz::{BitList, PersistentList, Ssz, SszHash, H256};
+use ssz::{BitList, H256, PersistentList, Ssz, SszHash};
 use std::collections::HashSet;
-use typenum::{Unsigned as _, U4096};
+use typenum::{U4096, Unsigned as _};
 use xmss::{AggregatedSignature, PublicKey, Signature};
 
-use crate::{validator::ValidatorRegistryLimit, Checkpoint, Slot};
+use crate::{Checkpoint, Slot, validator::ValidatorRegistryLimit};
 
 /// List of validator attestations included in a block (without signatures).
 /// Limit is VALIDATOR_REGISTRY_LIMIT (4096).

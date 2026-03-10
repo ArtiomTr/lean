@@ -5,11 +5,11 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use enum_iterator::Sequence;
 use strum::FromRepr;
 use tokio::time::Instant;
-use tokio_stream::{wrappers::IntervalStream, Stream, StreamExt};
+use tokio_stream::{Stream, StreamExt, wrappers::IntervalStream};
 
 /// NOTE: if this ever becomes a fractional number of seconds (i.e. 2.5, 0.5,
 /// etc.), don't forget to update `current_slot` functionality too.
@@ -239,7 +239,7 @@ impl Clock for SystemClock {
 mod tests {
     use enum_iterator::Sequence;
 
-    use crate::{Interval, DURATION_PER_INTERVAL, SLOT_DURATION};
+    use crate::{DURATION_PER_INTERVAL, Interval, SLOT_DURATION};
 
     #[test]
     fn configuration_is_valid() {

@@ -5,8 +5,8 @@ use std::{
 
 use ethereum_types::H32;
 use serde::{
-    de::{self, Visitor},
     Deserialize, Deserializer, Serialize,
+    de::{self, Visitor},
 };
 use ssz::{Ssz, U1};
 

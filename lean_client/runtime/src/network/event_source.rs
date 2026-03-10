@@ -95,7 +95,6 @@ impl EventSource for NetworkEventSource {
         &mut self,
         event_tx: mpsc::UnboundedSender<Self::Event>,
         mut effect_rx: mpsc::UnboundedReceiver<Self::Effect>,
-        startup_tx: oneshot::Sender<Result<()>>,
     ) -> Result<()> {
         let (shutdown_tx, _shutdown_rx) = futures::channel::mpsc::channel(128);
 
@@ -110,17 +109,7 @@ impl EventSource for NetworkEventSource {
         };
 
         let (mut network, globals) =
-            match Network::new(executor, context, Keypair::generate_ed25519()).await {
-                Ok(network) => {
-                    drop(startup_tx.send(Ok(())));
-                    network
-                }
-                Err(err) => {
-                    let startup_err = anyhow!("network initialization failed: {err:#}");
-                    drop(startup_tx.send(Err(startup_err)));
-                    return Err(err.into());
-                }
-            };
+            Network::new(executor, context, Keypair::generate_ed25519()).await?;
         let request_id = AtomicUsize::new(0);
 
         loop {

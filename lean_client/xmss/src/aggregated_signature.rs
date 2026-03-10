@@ -2,15 +2,15 @@ use core::fmt::{self, Display};
 use std::{str::FromStr, sync::Once};
 
 use crate::{PublicKey, Signature};
-use anyhow::{anyhow, bail, Context, Error, Result};
+use anyhow::{Context, Error, Result, anyhow, bail};
 use eth_ssz::{Decode, Encode};
 use ethereum_types::H256;
 use lean_multisig::{
-    xmss_aggregate_signatures, xmss_aggregation_setup_prover, xmss_aggregation_setup_verifier,
-    xmss_verify_aggregated_signatures, Devnet2XmssAggregateSignature,
+    Devnet2XmssAggregateSignature, xmss_aggregate_signatures, xmss_aggregation_setup_prover,
+    xmss_aggregation_setup_verifier, xmss_verify_aggregated_signatures,
 };
-use metrics::{stop_and_discard, METRICS};
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use metrics::{METRICS, stop_and_discard};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use ssz::{ByteList, Ssz};
 use typenum::U1048576;
 

@@ -10,7 +10,7 @@ use containers::{
 use enum_iterator::Sequence as _;
 use fork_choice::Store;
 use serde::Deserialize;
-use ssz::{SszHash as _, H256};
+use ssz::{H256, SszHash as _};
 use test_generator::test_resources;
 use xmss::PublicKey;
 

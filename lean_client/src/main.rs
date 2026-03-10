@@ -1,8 +1,6 @@
 use anyhow::{Context as _, Result};
 use clap::Parser;
-use containers::{
-    Block, BlockBody, Slot, State, Validator,
-};
+use containers::{Block, BlockBody, Slot, State, Validator};
 use ethereum_types::H256;
 use features::Feature;
 use fork_choice::Store;
