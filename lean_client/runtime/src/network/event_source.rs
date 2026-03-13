@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use containers::{
     ForkDigest, SignedAggregatedAttestation, SignedAttestation, SignedBlockWithAttestation,
 };
@@ -15,7 +15,7 @@ use networking::{
     PubsubMessage, RPCError, RequestType, Response, ServiceContext, StatusMessage, TaskExecutor,
 };
 use ssz::H256;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tracing::{error, warn};
 
 use crate::environment::EventSource;

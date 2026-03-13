@@ -31,4 +31,8 @@ impl HttpServerConfig {
     pub fn metrics_enabled(&self) -> bool {
         self.metrics.enabled()
     }
+
+    pub fn metrics(&self) -> &MetricsServerConfig {
+        &self.metrics
+    }
 }

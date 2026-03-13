@@ -2,6 +2,7 @@ use anyhow::{Result, anyhow, bail};
 use clock::SystemClock;
 use fork_choice::Store;
 use futures::future::join_all;
+use http_api::HttpServerConfig;
 use networking::NetworkConfig;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -10,6 +11,7 @@ use tracing::warn;
 use crate::{
     chain::ChainService,
     environment::{Effect, Event, EventSource, Message, Service, ServiceInput},
+    http::{HttpEventSource, HttpService},
     network::{NetworkEventSource, NetworkService},
     validator::{KeyManager, ValidatorConfig, ValidatorService},
 };
@@ -22,6 +24,7 @@ pub struct Node {
     validator_config: Option<ValidatorConfig>,
     key_manager: Option<KeyManager>,
     network_config: NetworkConfig,
+    http_config: HttpServerConfig,
 }
 
 impl Node {
@@ -31,6 +34,7 @@ impl Node {
         validator_config: Option<ValidatorConfig>,
         key_manager: Option<KeyManager>,
         network_config: NetworkConfig,
+        http_config: HttpServerConfig,
     ) -> Result<Self> {
         Ok(Self {
             clock: SystemClock::new(genesis)?,
@@ -38,6 +42,7 @@ impl Node {
             validator_config,
             key_manager,
             network_config,
+            http_config,
         })
     }
 
@@ -159,6 +164,13 @@ impl Node {
             shutdown.clone(),
         );
 
+        let (http_effect_tx, http_source_task) = Self::spawn_event_source(
+            HttpEventSource::new(self.http_config),
+            event_tx.clone(),
+            Event::Http,
+            shutdown.clone(),
+        );
+
         let (_clock_effect_tx, clock_source_task) =
             Self::spawn_event_source(self.clock, event_tx, Event::Tick, shutdown.clone());
 
@@ -171,6 +183,13 @@ impl Node {
 
         let (network_mailbox, network_task) = Self::spawn_service(
             NetworkService::new(),
+            message_tx.clone(),
+            effect_tx.clone(),
+            shutdown.clone(),
+        );
+
+        let (http_mailbox, http_task) = Self::spawn_service(
+            HttpService::new(),
             message_tx.clone(),
             effect_tx.clone(),
             shutdown.clone(),
@@ -222,6 +241,11 @@ impl Node {
                                         .send(ServiceInput::Message(msg))
                                         .map_err(|_| anyhow!("network mailbox closed"))?;
                                 }
+                                Message::Http(msg) => {
+                                    http_mailbox
+                                        .send(ServiceInput::Message(msg))
+                                        .map_err(|_| anyhow!("http mailbox closed"))?;
+                                }
                             }
                         }
                         event = event_rx.recv() => {
@@ -238,6 +262,11 @@ impl Node {
                                     network_mailbox
                                         .send(ServiceInput::Event(Event::Network(network_event)))
                                         .map_err(|_| anyhow!("network mailbox closed"))?;
+                                }
+                                Event::Http(http_event) => {
+                                    http_mailbox
+                                        .send(ServiceInput::Event(Event::Http(http_event)))
+                                        .map_err(|_| anyhow!("http mailbox closed"))?;
                                 }
                                 Event::Tick(tick) => {
                                     chain_mailbox
@@ -271,6 +300,11 @@ impl Node {
                                         .send(effect)
                                         .map_err(|_| anyhow!("network event source effect mailbox closed"))?;
                                 }
+                                Effect::Http(effect) => {
+                                    http_effect_tx
+                                        .send(effect)
+                                        .map_err(|_| anyhow!("http event source effect mailbox closed"))?;
+                                }
                             }
                         }
                         _ = tokio::signal::ctrl_c() => {
@@ -287,9 +321,11 @@ impl Node {
 
         let mut handles = vec![
             network_source_task,
+            http_source_task,
             clock_source_task,
             chain_task,
             network_task,
+            http_task,
             router_task,
         ];
 

@@ -11,7 +11,10 @@ use std::future::Future;
 use tokio::sync::mpsc;
 use tracing::Span;
 
-pub use crate::network::{NetworkEffect, NetworkEvent, NetworkMessage};
+pub use crate::{
+    http::{HttpEffect, HttpEvent, HttpMessage},
+    network::{NetworkEffect, NetworkEvent, NetworkMessage},
+};
 
 use clock::Tick;
 
@@ -26,6 +29,8 @@ pub enum Event {
     Tick(Tick),
     /// A block or attestation arrived from the P2P network.
     Network(NetworkEvent),
+    /// An HTTP API request arrived.
+    Http(HttpEvent),
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +44,7 @@ pub enum Message {
     Validator(ValidatorMessage),
     Chain(ChainMessage),
     Network(NetworkMessage),
+    Http(HttpMessage),
 }
 
 impl SpannedEvent {
@@ -54,6 +60,8 @@ impl SpannedEvent {
 pub enum Effect {
     /// Network-related effects (gossip, block requests).
     Network(NetworkEffect),
+    /// HTTP-related effects (send API responses).
+    Http(HttpEffect),
 }
 
 #[derive(Debug, Clone)]
@@ -128,6 +136,22 @@ impl ServiceOutput {
     #[inline]
     pub fn with_network_message(mut self, msg: NetworkMessage) -> Self {
         self.messages.push(Message::Network(msg));
+        self
+    }
+
+    #[inline]
+    pub fn http_message(msg: HttpMessage) -> Self {
+        let mut messages = SmallVec::new();
+        messages.push(Message::Http(msg));
+        Self {
+            messages,
+            effects: SmallVec::new(),
+        }
+    }
+
+    #[inline]
+    pub fn with_http_message(mut self, msg: HttpMessage) -> Self {
+        self.messages.push(Message::Http(msg));
         self
     }
 }

@@ -200,7 +200,8 @@ impl ClusterSimulator {
             | Effect::Network(NetworkEffect::SendStatusRequest { .. })
             | Effect::Network(NetworkEffect::SendRequestBlocksByRoot { .. })
             | Effect::Network(NetworkEffect::SendResponse { .. })
-            | Effect::Network(NetworkEffect::DisconnectPeer(_)) => {}
+            | Effect::Network(NetworkEffect::DisconnectPeer(_))
+            | Effect::Http(_) => {}
         }
     }
 }
@@ -343,6 +344,7 @@ impl Simulator {
                     | NetworkMessage::SendBlocksByRootChunk { .. }
                     | NetworkMessage::DisconnectPeer(_) => {}
                 },
+                Message::Http(_) => {}
             }
         }
 

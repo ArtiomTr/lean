@@ -601,6 +601,7 @@ impl Service for NetworkService {
         let output = match input {
             ServiceInput::Event(Event::Network(event)) => self.on_network_event(event),
             ServiceInput::Event(Event::Tick(_)) => self.check_timeouts(),
+            ServiceInput::Event(Event::Http(_)) => ServiceOutput::none(),
             ServiceInput::Message(NetworkMessage::RequestBlocksByRoot(block_roots)) => {
                 self.handle_request_blocks_by_root(block_roots)
             }

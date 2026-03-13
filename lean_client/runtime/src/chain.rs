@@ -35,6 +35,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     environment::{Event, NetworkEvent, Service, ServiceInput, ServiceOutput},
+    http::HttpMessage,
     network::NetworkMessage,
     validator::ValidatorMessage,
 };
@@ -72,6 +73,12 @@ pub enum ChainMessage {
         peer_id: PeerId,
         inbound_request_id: InboundRequestId,
         request: BlocksByRootRequest,
+    },
+    GetFinalizedState {
+        request_id: u64,
+    },
+    GetJustifiedCheckpoint {
+        request_id: u64,
     },
 }
 
@@ -249,7 +256,7 @@ impl Service for ChainService {
                 request,
             }),
 
-            ServiceInput::Event(Event::Network(_)) => ServiceOutput::none(),
+            ServiceInput::Event(Event::Network(_) | Event::Http(_)) => ServiceOutput::none(),
 
             // ── GetSlotData flow ─────────────────────────────────────────────
             //
@@ -417,6 +424,21 @@ impl Service for ChainService {
                 });
 
                 output
+            }
+
+            ServiceInput::Message(ChainMessage::GetFinalizedState { request_id }) => {
+                let finalized = *self.store.latest_finalized();
+
+                let state = self.store.states().get(&finalized.root).cloned();
+
+                ServiceOutput::http_message(HttpMessage::FinalizedState { request_id, state })
+            }
+
+            ServiceInput::Message(ChainMessage::GetJustifiedCheckpoint { request_id }) => {
+                ServiceOutput::http_message(HttpMessage::JustifiedCheckpoint {
+                    request_id,
+                    checkpoint: *self.store.latest_justified(),
+                })
             }
         }
     }

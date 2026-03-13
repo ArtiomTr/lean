@@ -218,14 +218,6 @@ async fn main() -> Result<()> {
         info!(%key_path, "Using custom node key path");
     }
 
-    // ── HTTP server ───────────────────────────────────────────────────────────
-
-    let http_handle = tokio::task::spawn(async move {
-        if let Err(err) = http_api::run_server(args.http_config).await {
-            tracing::error!("HTTP Server failed: {err:?}");
-        }
-    });
-
     // ── Node ──────────────────────────────────────────────────────────────────
 
     let node = Node::new(
@@ -234,6 +226,7 @@ async fn main() -> Result<()> {
         validator_config,
         key_manager,
         network_config,
+        args.http_config,
     )
     .context("Failed to create node")?;
 
@@ -241,17 +234,10 @@ async fn main() -> Result<()> {
     // blocking thread so it doesn't fight with the outer async runtime.
     let node_handle = tokio::task::spawn_blocking(move || node.run());
 
-    tokio::select! {
-        _ = http_handle => {
-            info!("HTTP service finished");
-        }
-        result = node_handle => {
-            match result {
-                Ok(Ok(())) => info!("Node finished"),
-                Ok(Err(e)) => tracing::error!("Node error: {e:?}"),
-                Err(e) => tracing::error!("Node panicked: {e:?}"),
-            }
-        }
+    match node_handle.await {
+        Ok(Ok(())) => info!("Node finished"),
+        Ok(Err(e)) => tracing::error!("Node error: {e:?}"),
+        Err(e) => tracing::error!("Node panicked: {e:?}"),
     }
 
     info!("Main task exiting");
