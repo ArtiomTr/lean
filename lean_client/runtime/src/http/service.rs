@@ -3,9 +3,10 @@ use serde::Serialize;
 use ssz::SszWrite as _;
 
 use crate::{
+    HttpResponse,
     chain::ChainMessage,
     environment::{Effect, Event, Service, ServiceInput, ServiceOutput},
-    http::{HttpEvent, HttpRequest},
+    http::{HttpEvent, HttpRequest, event_source::HttpEffect},
 };
 
 #[derive(Debug, Clone)]
@@ -18,24 +19,6 @@ pub enum HttpMessage {
         request_id: u64,
         checkpoint: Checkpoint,
     },
-}
-
-#[derive(Debug, Clone)]
-pub enum HttpEffect {
-    Respond {
-        request_id: u64,
-        response: HttpResponse,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub enum HttpResponse {
-    HealthOk(Vec<u8>),
-    FinalizedStateOk(Vec<u8>),
-    JustifiedCheckpointOk(Vec<u8>),
-    FinalizedStateNotFound,
-    ServiceUnavailable,
-    InternalServerError,
 }
 
 #[derive(Serialize)]

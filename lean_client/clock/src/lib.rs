@@ -235,6 +235,30 @@ impl Clock for SystemClock {
     }
 }
 
+pub struct TestClock {
+    interval: u32,
+}
+
+impl Clock for TestClock {
+    fn time_since_genesis(&self) -> Option<Duration> {
+        Some(DURATION_PER_INTERVAL * self.interval)
+    }
+}
+
+impl TestClock {
+    pub fn new() -> Self {
+        Self { interval: 0 }
+    }
+
+    pub fn tick(&mut self) {
+        self.interval += 1;
+    }
+
+    pub fn tick_n(&mut self, n: u32) {
+        self.interval += n;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use enum_iterator::Sequence;

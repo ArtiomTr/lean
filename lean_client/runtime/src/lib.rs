@@ -14,5 +14,4 @@ pub use environment::{Effect, Event, HttpEvent, NetworkEvent};
 pub use http::{HttpEffect, HttpEventSource, HttpMessage, HttpRequest, HttpResponse, HttpService};
 pub use network::{NetworkEffect, NetworkEventSource, NetworkService};
 pub use node::Node;
-pub use simulator::Simulator;
 pub use validator::{KeyManager, ValidatorConfig};

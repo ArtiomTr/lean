@@ -19,10 +19,7 @@ use metrics::metrics_module;
 use tokio::sync::{Mutex, Notify, mpsc};
 use tracing::{info, warn};
 
-use crate::{
-    environment::EventSource,
-    http::service::{HttpEffect, HttpResponse},
-};
+use crate::environment::EventSource;
 
 #[derive(Debug, Clone)]
 pub enum HttpRequest {
@@ -32,10 +29,28 @@ pub enum HttpRequest {
 }
 
 #[derive(Debug, Clone)]
+pub enum HttpResponse {
+    HealthOk(Vec<u8>),
+    FinalizedStateOk(Vec<u8>),
+    JustifiedCheckpointOk(Vec<u8>),
+    FinalizedStateNotFound,
+    ServiceUnavailable,
+    InternalServerError,
+}
+
+#[derive(Debug, Clone)]
 pub enum HttpEvent {
     RequestReceived {
         request_id: u64,
         request: HttpRequest,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum HttpEffect {
+    Respond {
+        request_id: u64,
+        response: HttpResponse,
     },
 }
 
