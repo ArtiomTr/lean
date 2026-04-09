@@ -5,11 +5,11 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
 use crate::{
-    Effect, Event, HttpMessage, HttpService, KeyManager, NetworkService, ValidatorConfig,
     chain::{ChainMessage, ChainService},
     environment::{Message, Service, ServiceInput, ServiceOutput},
     network::NetworkMessage,
     validator::{ValidatorMessage, ValidatorService},
+    Effect, Event, HttpMessage, HttpService, KeyManager, NetworkService, ValidatorConfig,
 };
 
 pub trait Strategy {
@@ -68,6 +68,10 @@ impl<S: Strategy> NodeSimulator<S> {
             .1
             .push_back(ServiceInput::Event(event.clone()));
         self.validator_inbox.1.push_back(ServiceInput::Event(event));
+    }
+
+    pub fn store(&self) -> &Store {
+        self.chain.store()
     }
 
     pub fn step(&mut self) -> Vec<Effect> {
@@ -218,6 +222,24 @@ impl<S: Strategy> NodeSimulator<S> {
         Vec::new()
     }
 
+    pub fn has_pending(&self) -> bool {
+        let mut candidates = 0;
+        if self.chain_inbox.0.is_some() || self.chain_inbox.1.len() > 0 {
+            candidates += 1;
+        }
+        if self.network_inbox.0.is_some() || self.network_inbox.1.len() > 0 {
+            candidates += 1;
+        }
+        if self.http_inbox.0.is_some() || self.http_inbox.1.len() > 0 {
+            candidates += 1;
+        }
+        if self.validator_inbox.0.is_some() || self.validator_inbox.1.len() > 0 {
+            candidates += 1;
+        }
+
+        candidates > 0
+    }
+
     fn put_message(&mut self, message: Message) {
         match message {
             Message::Chain(message) => self.chain_inbox.1.push_back(ServiceInput::Message(message)),
@@ -249,41 +271,5 @@ impl ChaChaStrategy {
 impl Strategy for ChaChaStrategy {
     fn select(&mut self, range: Range<usize>) -> usize {
         self.rand.random_range(range)
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use clock::{Clock, TestClock, Tick};
-    use containers::{Config, State};
-    use fork_choice::Store;
-
-    use super::NodeSimulator;
-    use crate::{Event, KeyManager, ValidatorConfig, simulator::ChaChaStrategy};
-
-    #[test]
-    fn normal_execution() {
-        let anchor_state = State {
-            config: Config { genesis_time: 0 },
-        };
-        let store = Store::new(anchor_state, anchor_block, validator_id).unwrap();
-        let validator_config = ValidatorConfig {
-            validator_indices: Vec::new(),
-        };
-        let key_manager = KeyManager::load(keys_dir, validator_indices).unwrap();
-
-        let node = NodeSimulator::new(
-            ChaChaStrategy::with_seed([0; 32]),
-            store,
-            validator_config,
-            key_manager,
-        );
-
-        let clock = TestClock::new();
-
-        node.feed(Event::Tick(Tick {
-            slot: clock.current_slot(),
-            interval: clock.current_interval(),
-        }));
     }
 }

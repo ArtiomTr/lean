@@ -68,6 +68,10 @@ pub struct KeyManager {
 }
 
 impl KeyManager {
+    pub fn from_keys(keys: HashMap<u64, SecretKey>) -> Self {
+        Self { keys }
+    }
+
     /// Create a key manager and load keys for the given validator indices.
     pub fn load(keys_dir: impl AsRef<Path>, validator_indices: &[u64]) -> Result<Self> {
         let keys_dir = keys_dir.as_ref();

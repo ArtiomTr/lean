@@ -7,8 +7,9 @@ mod environment;
 mod http;
 mod network;
 mod node;
-mod simulator;
 mod validator;
+
+pub mod simulator;
 
 pub use environment::{Effect, Event, HttpEvent, NetworkEvent};
 pub use http::{HttpEffect, HttpEventSource, HttpMessage, HttpRequest, HttpResponse, HttpService};

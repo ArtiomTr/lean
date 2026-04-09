@@ -189,17 +189,6 @@ impl Service for ChainService {
             // Every interval: advance the store clock only.
             // ValidatorService drives its own duties by sending GetSlotData.
             ServiceInput::Event(Event::Tick(Tick { slot, interval })) => {
-                // let genesis_time = self.store.config.genesis_time;
-                // let interval_index = u64::from(interval as u8);
-                // let current_time =
-                //     genesis_time + slot * SECONDS_PER_SLOT + interval_index * SECONDS_PER_INTERVAL;
-
-                // on_tick(&mut self.store, current_time, false);
-
-                // debug!(slot, interval = ?interval, store_time = self.store.time, "Chain tick processed");
-
-                // ServiceOutput::none()
-
                 if let Err(err) = self.store.on_tick(Slot(slot), interval, false, false) {
                     warn!(%err, slot, interval = ?interval, "Failed to advance forkchoice tick");
                     return ServiceOutput::none();
