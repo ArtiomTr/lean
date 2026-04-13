@@ -1,6 +1,6 @@
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, sync::Once};
 
-use clock::{Clock, TestClock, Tick};
+use clock::{Clock, Interval, TestClock, Tick};
 use containers::{Block, BlockBody, Slot, State, Validator};
 use fork_choice::Store;
 use ssz::{SszHash as _, SszWrite as _, H256};
@@ -10,6 +10,20 @@ use runtime::{
     simulator::{ChaChaStrategy, NodeSimulator},
     Effect, Event, KeyManager, NetworkEffect, NetworkEvent, ValidatorConfig,
 };
+
+fn init_tracing() {
+    static INIT: Once = Once::new();
+
+    INIT.call_once(|| {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::builder()
+                    .with_default_directive(LevelFilter::INFO.into())
+                    .from_env_lossy(),
+            )
+            .init();
+    });
+}
 
 fn simulation_assets_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/simulation_assets")
@@ -192,17 +206,18 @@ fn assert_nodes_are_consistent(nodes: &[NodeSimulator<ChaChaStrategy>], current_
     }
 }
 
+fn feed_tick(node: &mut NodeSimulator<ChaChaStrategy>, clock: &TestClock) {
+    node.feed(Event::Tick(Tick {
+        slot: clock.current_slot(),
+        interval: clock.current_interval(),
+    }));
+}
+
 #[test]
 fn normal_execution() {
     const TICKS: usize = 1000;
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::builder()
-                .with_default_directive(LevelFilter::INFO.into())
-                .from_env_lossy(),
-        )
-        .init();
+    init_tracing();
 
     let validators = load_or_generate_validators();
     let mut nodes = prepare_nodes(&validators);
@@ -212,18 +227,53 @@ fn normal_execution() {
     for _ in 0..TICKS {
         drain_pending(&mut nodes);
 
+        if clock.current_interval() == Interval::AttestationAcceptance {
+            assert_nodes_are_consistent(&nodes, clock.current_slot());
+        }
+
         clock.tick();
 
-        let tick = Event::Tick(Tick {
-            slot: clock.current_slot(),
-            interval: clock.current_interval(),
-        });
-
         for node in &mut nodes {
-            node.feed(tick.clone());
+            feed_tick(node, &clock);
         }
     }
 
     drain_pending(&mut nodes);
-    assert_nodes_are_consistent(&nodes, clock.current_slot());
+
+    if clock.current_interval() == Interval::AttestationAcceptance {
+        assert_nodes_are_consistent(&nodes, clock.current_slot());
+    }
+}
+
+#[test]
+fn skewed_clock_execution() {
+    const TICKS: usize = 1000;
+    const SKEWED_NODE_INDEX: usize = 0;
+
+    init_tracing();
+
+    let validators = load_or_generate_validators();
+    let mut nodes = prepare_nodes(&validators);
+    let mut clocks: Vec<_> = (0..nodes.len()).map(|_| TestClock::new()).collect();
+
+    // Start one node a full interval ahead of its peers.
+    clocks[SKEWED_NODE_INDEX].tick();
+
+    for (node, clock) in nodes.iter_mut().zip(&clocks) {
+        feed_tick(node, clock);
+    }
+
+    for _ in 0..TICKS {
+        drain_pending(&mut nodes);
+
+        for clock in &mut clocks {
+            clock.tick();
+        }
+
+        for (node, clock) in nodes.iter_mut().zip(&clocks) {
+            feed_tick(node, clock);
+        }
+    }
+
+    drain_pending(&mut nodes);
 }
